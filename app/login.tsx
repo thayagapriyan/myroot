@@ -103,10 +103,15 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     justifyContent: 'center',
     marginBottom: 20,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    ...Platform.select({
+      web: { boxShadow: '0px 4px 8px rgba(99,102,241,0.3)' },
+      default: {
+        shadowColor: '#6366f1',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+      }
+    }),
     elevation: 5,
   },
   logoText: { color: '#fff', fontSize: 32, fontWeight: '800' },
@@ -126,10 +131,15 @@ const styles = StyleSheet.create({
     padding: 18, 
     alignItems: 'center', 
     marginTop: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    ...Platform.select({
+      web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      }
+    }),
     elevation: 3,
   },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '700' },

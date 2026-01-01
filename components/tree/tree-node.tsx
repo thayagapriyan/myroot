@@ -1,7 +1,7 @@
 import { ThemedText } from '@/components/themed-text';
 import { Member } from '@/types/family';
 import React from 'react';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 interface TreeNodeProps {
   member: Member;
@@ -109,16 +109,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 10,
     elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    ...Platform.select({
+      web: { boxShadow: '0px 2px 2px rgba(0,0,0,0.2)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
+      }
+    }),
     borderWidth: 2,
     borderColor: '#fff',
   },
   sideFab: {
     borderWidth: 1,
-    shadowOpacity: 0.15,
+    ...Platform.select({
+      web: { boxShadow: '0px 0px 0px rgba(0,0,0,0.15)' },
+      default: { shadowOpacity: 0.15 }
+    }),
     elevation: 3,
   },
   removeFab: {
@@ -132,10 +140,15 @@ const styles = StyleSheet.create({
     left: -10,
     zIndex: 12,
     elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    ...Platform.select({
+      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.2)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
+      }
+    }),
     borderWidth: 2,
   },
   removeFabAvatar: {
@@ -149,10 +162,15 @@ const styles = StyleSheet.create({
     right: -8,
     zIndex: 12,
     elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
+    ...Platform.select({
+      web: { boxShadow: '0px 1px 3px rgba(0,0,0,0.25)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3,
+      }
+    }),
     borderWidth: 2,
     borderColor: '#fff',
   },
@@ -182,10 +200,15 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     padding: 2,
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    ...Platform.select({
+      web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      }
+    }),
     elevation: 3,
   },
   nodePhoto: { width: '100%', height: '100%', borderRadius: 6 },
@@ -201,10 +224,15 @@ const styles = StyleSheet.create({
     paddingVertical: 4, 
     borderRadius: 20, 
     marginTop: -10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    ...Platform.select({
+      web: { boxShadow: '0px 2px 2px rgba(0,0,0,0.2)' },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
+      }
+    }),
     elevation: 4,
     maxWidth: 140,
   },

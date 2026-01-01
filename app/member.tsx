@@ -482,8 +482,7 @@ export default function MemberScreen() {
                 placeholderTextColor="#94a3b8"
                 value={dobInput}
                 editable={false}
-                pointerEvents="none"
-                style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+                style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0', pointerEvents: 'none' }]}
               />
             </Pressable>
           )}

@@ -13,6 +13,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Stack, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
+import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Dimensions, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Svg, { Line, Marker, Path } from 'react-native-svg';
@@ -147,9 +148,32 @@ export default function TreeScreen() {
   }, [members]);
 
   const exportToFile = useCallback(async () => {
-    const json = JSON.stringify(members, null, 2);
-
     try {
+      const zip = new JSZip();
+      
+      // 1. Add the main tree JSON
+      zip.file('tree.json', JSON.stringify(members, null, 2));
+
+      // 2. Add profile photos
+      const photosFolder = zip.folder('photos');
+      if (photosFolder) {
+        for (const member of members) {
+          if (member.photo && member.photo.startsWith('file://')) {
+            try {
+              const base64 = await FileSystem.readAsStringAsync(member.photo, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              // Use member ID to keep it unique
+              photosFolder.file(`${member.id}/profile.jpg`, base64, { base64: true });
+            } catch (err) {
+              console.warn(`Could not include photo for ${member.name}:`, err);
+            }
+          }
+        }
+      }
+
+      const base64Zip = await zip.generateAsync({ type: 'base64' });
+
       const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
       if (!baseDir) {
         openExportModal();
@@ -157,37 +181,80 @@ export default function TreeScreen() {
       }
 
       const safeStamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileUri = `${baseDir}family-tree-${safeStamp}.json`;
-      await FileSystem.writeAsStringAsync(fileUri, json, { encoding: FileSystem.EncodingType.UTF8 });
+      const fileUri = `${baseDir}family-tree-${safeStamp}.zip`;
+      await FileSystem.writeAsStringAsync(fileUri, base64Zip, { encoding: FileSystem.EncodingType.Base64 });
 
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
         await Sharing.shareAsync(fileUri, {
-          mimeType: 'application/json',
-          dialogTitle: 'Export Family Tree',
+          mimeType: 'application/zip',
+          dialogTitle: 'Export Family Tree (ZIP)',
         });
       } else {
         openExportModal();
         Alert.alert('Sharing not available', 'Sharing is not available on this device. Copy the JSON from the export modal instead.');
       }
-    } catch {
+    } catch (error) {
+      console.error('Export failed:', error);
       openExportModal();
-      Alert.alert('Export failed', 'Could not export the JSON file. Copy the JSON from the export modal instead.');
+      Alert.alert('Export failed', 'Could not create the ZIP file. Falling back to JSON copy.');
     }
   }, [members, openExportModal]);
 
+  const exportToZipWeb = useCallback(async () => {
+    try {
+      const zip = new JSZip();
+      zip.file('tree.json', JSON.stringify(members, null, 2));
+      
+      const photosFolder = zip.folder('photos');
+      if (photosFolder) {
+        for (const member of members) {
+          if (member.photo) {
+            try {
+              if (member.photo.startsWith('data:image')) {
+                const base64Data = member.photo.split(',')[1];
+                photosFolder.file(`${member.id}/profile.jpg`, base64Data, { base64: true });
+              } else if (member.photo.startsWith('http') || member.photo.startsWith('blob:')) {
+                const response = await fetch(member.photo);
+                const blob = await response.blob();
+                photosFolder.file(`${member.id}/profile.jpg`, blob);
+              }
+            } catch (err) {
+              console.warn(`Could not include photo for ${member.name}:`, err);
+            }
+          }
+        }
+      }
+
+      const content = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(content);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `family-tree-${new Date().getTime()}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Web export failed:', error);
+      Alert.alert('Export failed', 'Could not create the ZIP file.');
+    }
+  }, [members]);
+
   const handleExportPress = useCallback(() => {
     if (Platform.OS === 'web') {
-      openExportModal();
+      Alert.alert('Export', 'Choose export method', [
+        { text: 'Download ZIP', onPress: () => void exportToZipWeb() },
+        { text: 'Copy JSON', onPress: openExportModal },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
       return;
     }
 
     Alert.alert('Export', 'Choose export method', [
-      { text: 'File', onPress: () => void exportToFile() },
-      { text: 'Copy/Paste', onPress: openExportModal },
+      { text: 'ZIP File', onPress: () => void exportToFile() },
+      { text: 'Copy JSON', onPress: openExportModal },
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [exportToFile, openExportModal]);
+  }, [exportToFile, exportToZipWeb, openExportModal]);
 
   const closeExport = useCallback(() => {
     setExportOpen(false);
@@ -222,6 +289,81 @@ export default function TreeScreen() {
     [ensureDefaultMember, normalizeImportedFamily, router]
   );
 
+  const importFromZip = useCallback(async (uri: string) => {
+    const userKey = await AsyncStorage.getItem('currentUser');
+    if (!userKey) return router.replace('/login');
+
+    try {
+      let zipData: any;
+      if (Platform.OS === 'web') {
+        const response = await fetch(uri);
+        zipData = await response.blob();
+      } else {
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        zipData = base64;
+      }
+
+      const zip = await JSZip.loadAsync(zipData, { base64: Platform.OS !== 'web' });
+      
+      // 1. Read tree.json
+      const treeFile = zip.file('tree.json');
+      if (!treeFile) {
+        Alert.alert('Invalid ZIP', 'The ZIP file does not contain tree.json.');
+        return;
+      }
+      const treeJson = await treeFile.async('string');
+      const parsed = JSON.parse(treeJson);
+      const next = normalizeImportedFamily(parsed);
+      if (!next) {
+        Alert.alert('Invalid format', 'The tree.json in the ZIP is invalid.');
+        return;
+      }
+
+      // 2. Extract photos
+      const updatedMembers = [...next];
+
+      if (Platform.OS !== 'web') {
+        const photosDir = `${FileSystem.documentDirectory}photos/`;
+        await FileSystem.makeDirectoryAsync(photosDir, { intermediates: true }).catch(() => {});
+
+        for (let i = 0; i < updatedMembers.length; i++) {
+          const m = updatedMembers[i];
+          const photoFile = zip.file(`photos/${m.id}/profile.jpg`);
+          if (photoFile) {
+            const photoBase64 = await photoFile.async('base64');
+            const localPhotoUri = `${photosDir}${m.id}_profile.jpg`;
+            await FileSystem.writeAsStringAsync(localPhotoUri, photoBase64, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            updatedMembers[i] = { ...m, photo: localPhotoUri };
+          }
+        }
+      } else {
+        // Web: Convert photos to base64 data URIs for storage
+        for (let i = 0; i < updatedMembers.length; i++) {
+          const m = updatedMembers[i];
+          const photoFile = zip.file(`photos/${m.id}/profile.jpg`);
+          if (photoFile) {
+            const photoBase64 = await photoFile.async('base64');
+            updatedMembers[i] = { ...m, photo: `data:image/jpeg;base64,${photoBase64}` };
+          }
+        }
+      }
+
+      const ensured = await ensureDefaultMember(userKey, updatedMembers);
+      await FamilyService.saveFamily(userKey, ensured);
+      setMembers(ensured);
+      setIsEditing(false);
+      setActiveMemberId(null);
+      Alert.alert('Imported', 'Family tree and photos imported successfully.');
+    } catch (error) {
+      console.error('Import failed:', error);
+      Alert.alert('Import failed', 'Could not process the ZIP file.');
+    }
+  }, [ensureDefaultMember, normalizeImportedFamily, router]);
+
   const openImportModal = useCallback(() => {
     setImportText('');
     setImportOpen(true);
@@ -229,21 +371,29 @@ export default function TreeScreen() {
 
   const importFromFile = useCallback(async () => {
     const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/json', 'text/json', 'text/plain'],
+      type: ['application/json', 'text/json', 'text/plain', 'application/zip'],
       copyToCacheDirectory: true,
       multiple: false,
     });
 
     if (result.canceled) return;
-    const uri = result.assets?.[0]?.uri;
-    if (!uri) {
+    const asset = result.assets?.[0];
+    if (!asset || !asset.uri) {
       Alert.alert('Import failed', 'No file was selected.');
       return;
     }
 
-    const text = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
-    await importFromJsonText(text);
-  }, [importFromJsonText]);
+    if (asset.name.toLowerCase().endsWith('.zip')) {
+      await importFromZip(asset.uri);
+    } else {
+      try {
+        const text = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+        await importFromJsonText(text);
+      } catch (err) {
+        Alert.alert('Import failed', 'Could not read the selected file.');
+      }
+    }
+  }, [importFromJsonText, importFromZip]);
 
   const handleImportPress = useCallback(() => {
     if (Platform.OS === 'web') {
@@ -471,6 +621,15 @@ export default function TreeScreen() {
       const performDelete = async () => {
         const userKey = await AsyncStorage.getItem('currentUser');
         if (!userKey) return router.replace('/login');
+
+        const memberToDelete = members.find(m => m.id === id);
+        if (memberToDelete?.photo && memberToDelete.photo.startsWith('file://')) {
+          try {
+            await FileSystem.deleteAsync(memberToDelete.photo, { idempotent: true });
+          } catch (err) {
+            console.warn('Could not delete photo file:', err);
+          }
+        }
 
         const next = members
           .filter((m) => m.id !== id)
@@ -839,11 +998,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     gap: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 2,
-    elevation: 1,
+    ...Platform.select({
+      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 1 },
+        shadowRadius: 2,
+        elevation: 1,
+      }
+    }),
   },
   topBtnPrimaryText: {
     fontWeight: '700',
@@ -857,11 +1021,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     gap: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 2,
-    elevation: 1,
+    ...Platform.select({
+      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 1 },
+        shadowRadius: 2,
+        elevation: 1,
+      }
+    }),
   },
   topBtnDangerText: {
     color: '#FF3B30',
@@ -876,11 +1045,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     gap: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 2,
-    elevation: 1,
+    ...Platform.select({
+      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 1 },
+        shadowRadius: 2,
+        elevation: 1,
+      }
+    }),
   },
   topBtnSecondaryText: {
     fontWeight: '700',
