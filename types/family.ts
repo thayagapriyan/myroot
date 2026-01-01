@@ -10,6 +10,8 @@ export interface Member {
   name: string;
   email?: string;
   dob?: string;
+  sex?: string;
+  age?: number;
   photo?: string;
   relations?: Relation[];
 }

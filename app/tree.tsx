@@ -32,7 +32,7 @@ export default function TreeScreen() {
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
     sourceId: string | null;
-    type: 'child' | 'spouse' | 'sibling' | null;
+    type: 'child' | 'spouse' | 'sibling' | 'parent' | null;
   }>({ open: false, sourceId: null, type: null });
   const [useNewTarget, setUseNewTarget] = useState(true);
   const [newTargetName, setNewTargetName] = useState('');
@@ -318,27 +318,45 @@ export default function TreeScreen() {
     return calculateTreeLayout(members, SCREEN_W);
   }, [members]);
 
-  const contentSize = useMemo(() => {
+  const { centeredPositions, contentWidth, contentHeight } = useMemo(() => {
     const nodeW = 140;
     const nodeH = 100;
     const pad = 260;
     const pts = Object.values(positions);
     if (!pts.length) {
-      return { width: SCREEN_W, height: 800 };
+      return { centeredPositions: positions, contentWidth: SCREEN_W, contentHeight: 800 };
     }
     const minX = Math.min(...pts.map((p) => p.x));
     const maxX = Math.max(...pts.map((p) => p.x));
     const minY = Math.min(...pts.map((p) => p.y));
     const maxY = Math.max(...pts.map((p) => p.y));
-    const width = Math.max(SCREEN_W, maxX - minX + nodeW + pad);
-    const height = Math.max(800, maxY - minY + nodeH + pad);
-    return { width, height };
+    const layoutWidth = maxX - minX + nodeW;
+    const layoutHeight = maxY - minY + nodeH;
+    const width = Math.max(SCREEN_W, layoutWidth + pad);
+    const height = Math.max(800, layoutHeight + pad);
+    const offsetX = (width - layoutWidth) / 2 - minX;
+    const offsetY = Math.max(0, (height - layoutHeight) / 4 - minY); // gentle vertical centering
+    const shifted: typeof positions = {};
+    Object.entries(positions).forEach(([id, p]) => {
+      shifted[id] = { x: p.x + offsetX, y: p.y + offsetY };
+    });
+    return { centeredPositions: shifted, contentWidth: width, contentHeight: height };
   }, [positions]);
 
-  const contentWidth = contentSize.width;
-  const contentHeight = contentSize.height;
+  const edgeColors = useMemo(() => {
+    const palette = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
+    const map = new Map<string, string>();
+    edges.forEach((e) => {
+      const key = e.isJoint && e.parent2 ? [e.from, e.parent2].sort().join('|') : e.from;
+      if (!map.has(key)) {
+        const color = palette[map.size % palette.length];
+        map.set(key, color);
+      }
+    });
+    return map;
+  }, [edges]);
 
-  const openRelationModal = useCallback((sourceId: string, type: 'child' | 'spouse' | 'sibling') => {
+  const openRelationModal = useCallback((sourceId: string, type: 'child' | 'spouse' | 'sibling' | 'parent') => {
     setRelationModal({ open: true, sourceId, type });
     setUseNewTarget(true);
     setNewTargetName('');
@@ -433,6 +451,44 @@ export default function TreeScreen() {
     closeRelationModal();
   }, [closeRelationModal, members, newTargetName, relationModal, router, targetId, useNewTarget]);
 
+  const handleDeleteMember = useCallback(
+    async (id: string) => {
+      if (members.length <= 1) {
+        Alert.alert('Keep one member', 'You need at least one member in your tree.');
+        return;
+      }
+
+      const performDelete = async () => {
+        const userKey = await AsyncStorage.getItem('currentUser');
+        if (!userKey) return router.replace('/login');
+
+        const next = members
+          .filter((m) => m.id !== id)
+          .map((m) => ({
+            ...m,
+            relations: (m.relations || []).filter((r) => r.targetId !== id),
+          }));
+
+        await FamilyService.saveFamily(userKey, next);
+        setMembers(next);
+        setActiveMemberId((prev) => (prev === id ? null : prev));
+      };
+
+      if (Platform.OS === 'web') {
+        if (confirm('Remove this member?')) {
+          await performDelete();
+        }
+        return;
+      }
+
+      Alert.alert('Remove member', 'Are you sure you want to delete this member?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void performDelete() },
+      ]);
+    },
+    [members, router]
+  );
+
   return (
     <ThemedView style={{ flex: 1, backgroundColor: bgColor }}>
       <Stack.Screen 
@@ -441,21 +497,13 @@ export default function TreeScreen() {
           title: 'Family Tree',
           headerLeft: () => null,
           headerRight: () => (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginRight: 12 }}>
-              <Pressable onPress={handleExportPress} style={[styles.headerPill, { backgroundColor: tint, borderColor: tint }]}>
-                <ThemedText style={styles.headerPillText}>Export</ThemedText>
-              </Pressable>
-              <Pressable onPress={handleImportPress} style={[styles.headerPill, { backgroundColor: tint, borderColor: tint }]}>
-                <ThemedText style={styles.headerPillText}>Import</ThemedText>
-              </Pressable>
-              <Pressable
-                onPress={() => router.push('/profile')}
-                style={[styles.iconBtn, { backgroundColor: tint, borderColor: tint }]}
-                accessibilityLabel="Profile"
-              >
-                <Ionicons name="person-circle-outline" size={22} color="#fff" />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => router.push('/profile')}
+              style={[styles.iconBtn, { backgroundColor: tint, borderColor: tint, marginRight: 12 }]}
+              accessibilityLabel="Profile"
+            >
+              <Ionicons name="person-circle-outline" size={22} color="#fff" />
+            </Pressable>
           ),
         }} 
       />
@@ -463,22 +511,37 @@ export default function TreeScreen() {
       <ScrollView horizontal style={{ flex: 1 }} contentContainerStyle={{ width: contentWidth }}>
         <ScrollView contentContainerStyle={{ height: contentHeight, paddingBottom: 96 }}>
           <View style={{ flex: 1 }}>
-            {layers.map((_, i) => (
-              <ThemedText 
-                key={`gen-${i}`} 
-                style={{ 
-                  position: 'absolute', 
-                  left: 10, 
-                  top: i * 180 + 100 + 40, 
-                  fontWeight: 'bold', 
-                  color: tint,
-                  opacity: 0.5,
-                  zIndex: 0
-                }}
-              >
-                Gen {i + 1}
-              </ThemedText>
-            ))}
+            <View style={styles.inlineControls}>
+              <View style={styles.inlineLeft}>
+                <Pressable
+                  disabled={members.length <= 1}
+                  onPress={() => setIsEditing((v) => !v)}
+                  style={[styles.topBtnPrimary, members.length <= 1 && { opacity: 0.45 }]}
+                >
+                  <ThemedText style={styles.topBtnPrimaryText}>{isEditing ? 'Done' : 'Edit'}</ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={handleReset}
+                  style={styles.topBtnDanger}
+                >
+                  <ThemedText style={styles.topBtnDangerText}>Reset</ThemedText>
+                </Pressable>
+              </View>
+              <View style={styles.inlineRight}>
+                <Pressable
+                  onPress={handleExportPress}
+                  style={styles.topBtnSecondary}
+                >
+                  <ThemedText style={styles.topBtnSecondaryText}>Export</ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={handleImportPress}
+                  style={styles.topBtnSecondary}
+                >
+                  <ThemedText style={styles.topBtnSecondaryText}>Import</ThemedText>
+                </Pressable>
+              </View>
+            </View>
             <Svg style={StyleSheet.absoluteFill} width={contentWidth} height={contentHeight}>
               {/* Define arrow marker */}
               <Marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
@@ -487,8 +550,8 @@ export default function TreeScreen() {
 
               {/* Spouse Edges */}
               {spouseEdges.map((e, i) => {
-                const a = positions[e.from];
-                const b = positions[e.to];
+                const a = centeredPositions[e.from];
+                const b = centeredPositions[e.to];
                 if (!a || !b) return null;
                 return (
                   <Line
@@ -503,15 +566,15 @@ export default function TreeScreen() {
               })}
 
               {edges.map((e, i) => {
-                const a = positions[e.from];
-                const b = positions[e.to];
+                const a = centeredPositions[e.from];
+                const b = centeredPositions[e.to];
                 if (!a || !b) return null;
 
                 let startX = a.x + 70;
                 let startY = a.y + 80;
 
                 if (e.isJoint && e.parent2) {
-                    const p2 = positions[e.parent2];
+                    const p2 = centeredPositions[e.parent2];
                     if (p2) {
                         startX = (a.x + p2.x) / 2 + 70;
                         startY = a.y + 40; // Start from middle of spouse line
@@ -522,12 +585,14 @@ export default function TreeScreen() {
                 const endY = b.y;
                 const midY = (startY + endY) / 2;
                 
+                const key = e.isJoint && e.parent2 ? [e.from, e.parent2].sort().join('|') : e.from;
+                const stroke = edgeColors.get(key) || tint;
                 return (
                   <Path
                     key={`edge-${i}`}
                     d={`M ${startX} ${startY} C ${startX} ${midY} ${endX} ${midY} ${endX} ${endY}`}
-                    stroke={tint}
-                    strokeOpacity={0.35}
+                    stroke={stroke}
+                    strokeOpacity={0.6}
                     strokeWidth={2}
                     fill="none"
                   />
@@ -535,7 +600,7 @@ export default function TreeScreen() {
               })}
             </Svg>
 
-            {Object.entries(positions).map(([id, pos]) => {
+            {Object.entries(centeredPositions).map(([id, pos]) => {
               const m = members.find((mm) => mm.id === id);
               if (!m) return null;
               
@@ -553,32 +618,13 @@ export default function TreeScreen() {
                   showActions={isEditing || activeMemberId === id}
                   onPress={(id) => handleSelectMember(id)}
                   onAddRelation={(id, type) => openRelationModal(id, type as any)}
+                  onRemove={handleDeleteMember}
                 />
               );
             })}
           </View>
         </ScrollView>
       </ScrollView>
-
-      <View style={[styles.bottomBar, { backgroundColor: cardColor, borderTopColor: borderColor }]}>
-        <Pressable
-          disabled={members.length <= 1}
-          onPress={() => setIsEditing((v) => !v)}
-          style={[
-            styles.bottomBtn,
-            { backgroundColor: tint, borderColor: tint, opacity: members.length <= 1 ? 0.4 : 1 },
-          ]}
-        >
-          <ThemedText style={styles.bottomBtnText}>{isEditing ? 'Done' : 'Edit'}</ThemedText>
-        </Pressable>
-
-        <Pressable
-          onPress={handleReset}
-          style={[styles.bottomBtn, { backgroundColor: '#FF3B30', borderColor: '#FF3B30' }]}
-        >
-          <ThemedText style={styles.bottomBtnText}>Restart</ThemedText>
-        </Pressable>
-      </View>
 
       {relationModal.open && (
         <View style={styles.overlay}>
@@ -732,31 +778,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bottomBar: {
+  inlineControls: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderTopWidth: 1,
+    top: 12,
+    left: 12,
+    right: 12,
     flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'center',
-  },
-  bottomBtn: {
-    minWidth: 140,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
+    zIndex: 10,
   },
-  bottomBtnText: {
-    color: '#fff',
+  inlineLeft: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  inlineRight: { flexDirection: 'row', gap: 8, alignItems: 'center', marginLeft: 'auto' },
+  topBtnPrimary: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  topBtnPrimaryText: {
+    color: '#0A84FF',
     fontWeight: '800',
-    fontSize: 14,
+    fontSize: 12,
+  },
+  topBtnDanger: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  topBtnDangerText: {
+    color: '#FF3B30',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  topBtnSecondary: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  topBtnSecondaryText: {
+    color: '#0f172a',
+    fontWeight: '800',
+    fontSize: 12,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,

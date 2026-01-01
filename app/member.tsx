@@ -4,10 +4,11 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { FamilyService } from '@/services/family-service';
 import { Member } from '@/types/family';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 const RELATION_TYPES = [
   'parent',
@@ -43,11 +44,26 @@ export default function MemberScreen() {
   const [editingCustom, setEditingCustom] = useState('');
   const [addNewMember, setAddNewMember] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
+  const [sexInput, setSexInput] = useState('');
+  const [dobInput, setDobInput] = useState('');
+  const [showDobPicker, setShowDobPicker] = useState(false);
+  const [tempDob, setTempDob] = useState<Date | null>(null);
 
   const inputBg = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
   const tint = useThemeColor({}, 'tint');
   const textColor = useThemeColor({}, 'text');
+
+  const computeAge = (dob?: string) => {
+    if (!dob) return undefined;
+    const parsed = new Date(dob);
+    if (Number.isNaN(parsed.getTime())) return undefined;
+    const now = new Date();
+    let age = now.getFullYear() - parsed.getFullYear();
+    const m = now.getMonth() - parsed.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < parsed.getDate())) age -= 1;
+    return age >= 0 ? age : undefined;
+  };
 
   useEffect(() => {
     (async () => {
@@ -59,6 +75,18 @@ export default function MemberScreen() {
       setMember(found || null);
     })();
   }, [id, router]);
+
+  useEffect(() => {
+    if (member) {
+      setSexInput(member.sex || '');
+      setDobInput(member.dob || '');
+      setTempDob(member.dob ? new Date(member.dob) : null);
+    } else {
+      setSexInput('');
+      setDobInput('');
+      setTempDob(null);
+    }
+  }, [member]);
 
   const saveMembers = async (list: Member[]) => {
     const userKey = await AsyncStorage.getItem('currentUser');
@@ -114,6 +142,63 @@ export default function MemberScreen() {
     } catch {
       Alert.alert('Error', 'Could not pick an image.');
     }
+  };
+
+  const formatDate = (d: Date) => {
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const handleOpenDobPicker = () => {
+    if (Platform.OS === 'web') return; // fallback to text input on web
+    const base = dobInput ? new Date(dobInput) : new Date();
+    setTempDob(Number.isNaN(base.getTime()) ? new Date() : base);
+    setShowDobPicker(true);
+  };
+
+  const handleConfirmDob = () => {
+    if (!tempDob) {
+      setShowDobPicker(false);
+      return;
+    }
+    const next = formatDate(tempDob);
+    setDobInput(next);
+    setShowDobPicker(false);
+  };
+
+  const handleSaveProfileInfo = async () => {
+    if (!member) return;
+    const list = [...members];
+    const idx = list.findIndex((m) => m.id === member.id);
+    if (idx === -1) return Alert.alert('Error', 'Member not found');
+
+    const cleanSex = sexInput.trim();
+    const cleanDob = dobInput.trim();
+    const age = computeAge(cleanDob || undefined);
+
+    list[idx] = {
+      ...list[idx],
+      sex: cleanSex || undefined,
+      dob: cleanDob || undefined,
+      age,
+    };
+
+    // If this member is the logged-in user, sync minimal fields back to the user record.
+    const currentKey = await AsyncStorage.getItem('currentUser');
+    if (currentKey) {
+      const userRaw = await AsyncStorage.getItem(currentKey);
+      const user = userRaw ? JSON.parse(userRaw) : null;
+      const isMe = !!user && ((user.email && member.email && user.email === member.email) || (user.name && user.name === member.name));
+      if (isMe) {
+        const nextUser = { ...user, dob: cleanDob || undefined, sex: cleanSex || undefined, age };
+        await AsyncStorage.setItem(currentKey, JSON.stringify(nextUser));
+      }
+    }
+
+    await saveMembers(list);
+    Alert.alert('Saved', 'Profile updated');
   };
 
   const handleAddRelationTo = async (targetId: string) => {
@@ -245,6 +330,76 @@ export default function MemberScreen() {
     ]);
   };
 
+  const derivedRelations = useMemo(() => {
+    if (!member) return { siblings: [], grandparents: [], cousins: [], nephews: [], nieces: [] };
+
+    const byId = new Map(members.map((m) => [m.id, m] as const));
+
+    const parentsOf = (id: string) => {
+      const m = byId.get(id);
+      if (!m) return [] as string[];
+      return (m.relations || []).filter((r) => r.type === 'parent').map((r) => r.targetId).filter((pid) => byId.has(pid));
+    };
+
+    const childrenOf = (id: string) => {
+      const m = byId.get(id);
+      if (!m) return [] as string[];
+      return (m.relations || []).filter((r) => r.type === 'child').map((r) => r.targetId).filter((cid) => byId.has(cid));
+    };
+
+    const siblingIds = (() => {
+      const parents = parentsOf(member.id);
+      const sibs = new Set<string>();
+      parents.forEach((p) => {
+        childrenOf(p).forEach((c) => {
+          if (c !== member.id) sibs.add(c);
+        });
+      });
+      return Array.from(sibs);
+    })();
+
+    const grandparentIds = (() => {
+      const gps = new Set<string>();
+      parentsOf(member.id).forEach((p) => {
+        parentsOf(p).forEach((gp) => gps.add(gp));
+      });
+      return Array.from(gps);
+    })();
+
+    const cousinIds = (() => {
+      const cousins = new Set<string>();
+      parentsOf(member.id).forEach((p) => {
+        // parent siblings
+        const pParents = parentsOf(p);
+        pParents.forEach((gp) => {
+          childrenOf(gp).forEach((uncleAunt) => {
+            if (uncleAunt === p) return;
+            childrenOf(uncleAunt).forEach((c) => cousins.add(c));
+          });
+        });
+      });
+      cousins.delete(member.id);
+      siblingIds.forEach((s) => cousins.delete(s));
+      return Array.from(cousins);
+    })();
+
+    const nieceNephewIds = (() => {
+      const nn = new Set<string>();
+      siblingIds.forEach((sib) => {
+        childrenOf(sib).forEach((c) => nn.add(c));
+      });
+      return Array.from(nn);
+    })();
+
+    return {
+      siblings: siblingIds.map((id) => byId.get(id)!).filter(Boolean),
+      grandparents: grandparentIds.map((id) => byId.get(id)!).filter(Boolean),
+      cousins: cousinIds.map((id) => byId.get(id)!).filter(Boolean),
+      nephews: nieceNephewIds.map((id) => byId.get(id)!).filter(Boolean),
+      nieces: nieceNephewIds.map((id) => byId.get(id)!).filter(Boolean),
+    };
+  }, [member, members]);
+
   if (!member) return <ThemedView style={styles.container}><ThemedText>Loading...</ThemedText></ThemedView>;
 
   return (
@@ -262,6 +417,46 @@ export default function MemberScreen() {
           </Pressable>
           <ThemedText style={styles.profileName}>{member.name}</ThemedText>
           {member.dob && <ThemedText style={styles.profileDob}>Born: {member.dob}</ThemedText>}
+        </View>
+
+        <View style={[styles.section, styles.infoCard, { backgroundColor: inputBg, borderColor: border }]}>
+          <ThemedText style={styles.sectionTitle}>Profile</ThemedText>
+          <ThemedText style={styles.label}>Sex</ThemedText>
+          <View style={styles.sexRow}>
+            {['Male', 'Female'].map((opt) => (
+              <Pressable
+                key={opt}
+                style={[styles.sexChip, sexInput === opt && { backgroundColor: tint, borderColor: tint }]}
+                onPress={() => setSexInput(opt)}
+              >
+                <ThemedText style={[styles.sexChipText, sexInput === opt && { color: '#fff' }]}>{opt}</ThemedText>
+              </Pressable>
+            ))}
+          </View>
+          {Platform.OS === 'web' ? (
+            <TextInput
+              placeholder="DOB (YYYY-MM-DD)"
+              placeholderTextColor="#94a3b8"
+              value={dobInput}
+              onChangeText={setDobInput}
+              style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+            />
+          ) : (
+            <Pressable onPress={handleOpenDobPicker}>
+              <TextInput
+                placeholder="DOB (YYYY-MM-DD)"
+                placeholderTextColor="#94a3b8"
+                value={dobInput}
+                editable={false}
+                pointerEvents="none"
+                style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+              />
+            </Pressable>
+          )}
+          <ThemedText style={styles.metaText}>Age: {computeAge(dobInput) ?? '—'}</ThemedText>
+          <Pressable style={[styles.saveBtn, { backgroundColor: tint }]} onPress={handleSaveProfileInfo}>
+            <ThemedText style={{ color: '#fff', fontWeight: '800' }}>Save Profile</ThemedText>
+          </Pressable>
         </View>
 
         <View style={styles.section}>
@@ -298,6 +493,26 @@ export default function MemberScreen() {
           ) : (
             <ThemedText style={styles.emptyText}>No relationships added yet.</ThemedText>
           )}
+        </View>
+
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionTitle}>Family Insights</ThemedText>
+          <View style={[styles.relationSummary, { borderColor: border }]}> 
+            <ThemedText style={styles.summaryLabel}>Siblings</ThemedText>
+            <ThemedText style={styles.summaryValue}>{derivedRelations.siblings.map((m) => m.name).join(', ') || '—'}</ThemedText>
+          </View>
+          <View style={[styles.relationSummary, { borderColor: border }]}> 
+            <ThemedText style={styles.summaryLabel}>Grandparents</ThemedText>
+            <ThemedText style={styles.summaryValue}>{derivedRelations.grandparents.map((m) => m.name).join(', ') || '—'}</ThemedText>
+          </View>
+          <View style={[styles.relationSummary, { borderColor: border }]}> 
+            <ThemedText style={styles.summaryLabel}>Cousins</ThemedText>
+            <ThemedText style={styles.summaryValue}>{derivedRelations.cousins.map((m) => m.name).join(', ') || '—'}</ThemedText>
+          </View>
+          <View style={[styles.relationSummary, { borderColor: border }]}> 
+            <ThemedText style={styles.summaryLabel}>Nephew/Niece</ThemedText>
+            <ThemedText style={styles.summaryValue}>{derivedRelations.nephews.map((m) => m.name).join(', ') || '—'}</ThemedText>
+          </View>
         </View>
 
         {adding && (
@@ -349,6 +564,31 @@ export default function MemberScreen() {
           </View>
         )}
 
+        {showDobPicker && (
+          <Modal transparent animationType="fade" visible={showDobPicker} onRequestClose={() => setShowDobPicker(false)}>
+            <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+              <View style={[styles.modalContent, { backgroundColor: inputBg }]}> 
+                <ThemedText style={styles.modalTitle}>Select DOB</ThemedText>
+                <DateTimePicker
+                  value={tempDob || new Date()}
+                  mode="date"
+                  display="spinner"
+                  onChange={(_, d) => d && setTempDob(d)}
+                  maximumDate={new Date()}
+                />
+                <View style={[styles.modalButtons, { marginTop: 16 }]}> 
+                  <Pressable style={styles.modalBtn} onPress={() => setShowDobPicker(false)}>
+                    <ThemedText>Cancel</ThemedText>
+                  </Pressable>
+                  <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleConfirmDob}>
+                    <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Confirm</ThemedText>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        )}
+
         {editingIndex !== null && (
           <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
             <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
@@ -383,6 +623,7 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 24, fontWeight: '800' },
   profileDob: { fontSize: 14, color: '#64748b', marginTop: 4 },
   section: { marginBottom: 24 },
+  infoCard: { borderWidth: 1, borderRadius: 16, padding: 16 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   sectionTitle: { fontSize: 18, fontWeight: '700' },
   addButton: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
@@ -402,12 +643,20 @@ const styles = StyleSheet.create({
   chipScroll: { flexDirection: 'row', marginBottom: 16 },
   chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, marginRight: 8 },
   chipText: { fontSize: 12, fontWeight: '600' },
+  sexRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  sexChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0' },
+  sexChipText: { fontSize: 14, fontWeight: '700', color: '#475569' },
   toggleContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 12, padding: 4, marginBottom: 16 },
   toggle: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
   toggleText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
   input: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 16 },
+  metaText: { fontSize: 14, color: '#64748b', marginBottom: 12 },
+  saveBtn: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12 },
   memberList: { maxHeight: 200, marginBottom: 16 },
   memberRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
   modalBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
+  relationSummary: { borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 8 },
+  summaryLabel: { fontSize: 14, fontWeight: '700' },
+  summaryValue: { fontSize: 14, color: '#475569', marginTop: 4 },
 });

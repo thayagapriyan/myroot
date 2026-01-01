@@ -170,17 +170,59 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
     });
   });
 
-  // Recompute depth map after spouse alignment.
-  const depthOfMember = new Map<string, number>();
-  layers.forEach((ids, depth) => ids.forEach((id) => depthOfMember.set(id, depth)));
+  // Map child-unit -> parent-units to compute child centering.
+  const parentUnitsOf = new Map<string, Set<string>>();
+  // Map parent-unit -> child-units to keep parents near their children when they have no parents above them.
+  const childUnitsOf = new Map<string, Set<string>>();
+  children.forEach((kids, parentId) => {
+    const pu = unitOf(parentId);
+    kids.forEach((kidId) => {
+      const cu = unitOf(kidId);
+      if (pu === cu) return;
+      const set = parentUnitsOf.get(cu) || new Set<string>();
+      set.add(pu);
+      parentUnitsOf.set(cu, set);
 
-  // Build unit depth (spouse-group depth) and unit layers (ordered).
+      const cset = childUnitsOf.get(pu) || new Set<string>();
+      cset.add(cu);
+      childUnitsOf.set(pu, cset);
+    });
+  });
+
+  // Compute unit depths by traversing the unit parent graph so children always sit below parents.
+  const allUnits = Array.from(compMembers.keys());
+  const indegree = new Map<string, number>();
+  allUnits.forEach((u) => indegree.set(u, 0));
+  parentUnitsOf.forEach((ps, cu) => indegree.set(cu, ps.size));
+
   const unitDepth = new Map<string, number>();
-  compMembers.forEach((ids, root) => {
-    const depths = ids
-      .map((id) => depthOfMember.get(id))
-      .filter((d): d is number => typeof d === 'number');
-    unitDepth.set(root, depths.length ? Math.min(...depths) : 0);
+  const queue: string[] = [];
+  indegree.forEach((deg, u) => {
+    if (deg === 0) queue.push(u);
+  });
+  while (queue.length) {
+    const u = queue.shift()!;
+    const d = unitDepth.get(u) ?? 0;
+    const childrenUnits = Array.from(childUnitsOf.get(u) || []);
+    childrenUnits.forEach((cu) => {
+      const nextDepth = d + 1;
+      const prev = unitDepth.get(cu);
+      if (prev === undefined || nextDepth > prev) unitDepth.set(cu, nextDepth);
+      indegree.set(cu, (indegree.get(cu) ?? 1) - 1);
+      if ((indegree.get(cu) ?? 0) === 0) queue.push(cu);
+    });
+    if (!unitDepth.has(u)) unitDepth.set(u, d);
+  }
+  // Any remaining (cycles or disconnected) get depth 0
+  allUnits.forEach((u) => {
+    if (!unitDepth.has(u)) unitDepth.set(u, 0);
+  });
+
+  // Recompute member depths from unit depths for ordering helpers.
+  const depthOfMember = new Map<string, number>();
+  compMembers.forEach((ids, u) => {
+    const d = unitDepth.get(u) ?? 0;
+    ids.forEach((id) => depthOfMember.set(id, d));
   });
 
   // Stable anchor chooser for a spouse unit: prefer members connected via parent/child traversal,
@@ -199,57 +241,35 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
     return all.sort((a, b) => a.localeCompare(b))[0] ?? '';
   };
 
+  // Build unit layers from computed depths.
   const unitLayers: string[][] = [];
-  layers.forEach((col, depth) => {
-    const units = Array.from(new Set(col.map((id) => unitOf(id))));
-    const ordered = units
-      .slice()
-      .sort((a, b) => {
-        const aa = getAnchorId(a);
-        const bb = getAnchorId(b);
-        if (aa && bb && aa !== bb) return aa.localeCompare(bb);
-        return a.localeCompare(b);
-      });
-    if (!unitLayers[depth]) unitLayers[depth] = [];
-    ordered.forEach((u) => {
-      if (!unitLayers[depth].includes(u)) unitLayers[depth].push(u);
-    });
-  });
-  compMembers.forEach((_ids, u) => {
+  allUnits.forEach((u) => {
     const d = unitDepth.get(u) ?? 0;
-    const already = unitLayers.some((layer) => layer?.includes(u));
-    if (!already) {
-      if (!unitLayers[d]) unitLayers[d] = [];
-      unitLayers[d].push(u);
-    }
+    if (!unitLayers[d]) unitLayers[d] = [];
+    unitLayers[d].push(u);
   });
-
-  // Map child-unit -> parent-units to compute child centering.
-  const parentUnitsOf = new Map<string, Set<string>>();
-  children.forEach((kids, parentId) => {
-    const pu = unitOf(parentId);
-    kids.forEach((kidId) => {
-      const cu = unitOf(kidId);
-      if (pu === cu) return;
-      const set = parentUnitsOf.get(cu) || new Set<string>();
-      set.add(pu);
-      parentUnitsOf.set(cu, set);
+  unitLayers.forEach((layer, depth) => {
+    layer.sort((a, b) => {
+      const aa = getAnchorId(a);
+      const bb = getAnchorId(b);
+      if (aa && bb && aa !== bb) return aa.localeCompare(bb);
+      return a.localeCompare(b);
     });
+    unitLayers[depth] = Array.from(new Set(layer));
   });
 
   const unitCount = (u: string) => Math.max(1, compMembers.get(u)?.length ?? 1);
-  // Unit X coordinate is the left-x of the "anchor" member within the unit.
-  // Additional spouses/partners are placed to the right so the anchor doesn't jump when a spouse is added.
+  const unitWidth = (u: string) => nodeWidth + (unitCount(u) - 1) * memberGap;
+  // Unit X coordinate is the left-x of the unit; width accounts for spouses/partners so children center under the whole union.
   const unitBounds = (u: string, anchorLeftX: number) => {
-    const n = unitCount(u);
+    const width = unitWidth(u);
     const left = anchorLeftX;
-    const right = anchorLeftX + (n - 1) * memberGap + nodeWidth;
+    const right = anchorLeftX + width;
     return { left, right };
   };
   const unitMidX = (u: string) => {
     const x = unitX.get(u) ?? 0;
-    // Anchor mid (first member), so adding a spouse does not change the child's alignment.
-    return x + nodeWidth / 2;
+    return x + unitWidth(u) / 2;
   };
 
   const unitX = new Map<string, number>();
@@ -269,11 +289,9 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
           .map((p) => unitMidX(p))
           .filter((x): x is number => typeof x === 'number');
         if (xs.length) {
-          // Convert desired center into desired anchor-left.
+          // Convert desired center into desired anchor-left, centering the whole unit (spouse group) under its parents.
           const center = xs.reduce((a, b) => a + b, 0) / xs.length;
-          // Align the anchor (first node) to the center of the parents.
-          // This ensures the child node stays under the parent, and spouses are added to the side.
-          targetX.set(u, center - nodeWidth / 2);
+          targetX.set(u, center - unitWidth(u) / 2);
           return;
         }
       }

@@ -11,11 +11,22 @@ interface TreeNodeProps {
   showActions?: boolean;
   onPress: (id: string) => void;
   onAddRelation: (id: string, type: string) => void;
+  onRemove: (id: string) => void;
 }
 
-export function TreeNode({ member, position, color, isEditing = false, showActions = false, onPress, onAddRelation }: TreeNodeProps) {
+export function TreeNode({ member, position, color, isEditing = false, showActions = false, onPress, onAddRelation, onRemove }: TreeNodeProps) {
   return (
     <View style={[styles.node, { left: position.x, top: position.y }]}>
+      {isEditing && (
+        <Pressable
+          hitSlop={styles.hitSlop}
+          style={[styles.removeFab, { backgroundColor: '#ef4444', borderColor: '#fff' }]}
+          onPress={() => onRemove(member.id)}
+        >
+          <ThemedText style={styles.removeFabText}>-</ThemedText>
+        </Pressable>
+      )}
+
       <Pressable 
         style={styles.nodeCard} 
         onPress={() => onPress(member.id)}
@@ -34,30 +45,22 @@ export function TreeNode({ member, position, color, isEditing = false, showActio
         </View>
       </Pressable>
 
-      {showActions && (
+      {showActions && !isEditing && (
         <>
+          {/* Add Parent (Top) */}
+          <Pressable 
+            hitSlop={styles.hitSlop}
+            style={[styles.miniFab, { top: -16, alignSelf: 'center', backgroundColor: isEditing ? color : '#64748b', borderColor: '#fff' }]}
+            onPress={() => onAddRelation(member.id, 'parent')}
+          >
+            <ThemedText style={styles.miniFabText}>+</ThemedText>
+          </Pressable>
+
           {/* Add Child (Bottom) */}
           <Pressable 
             hitSlop={styles.hitSlop}
             style={[styles.miniFab, { bottom: -16, alignSelf: 'center', backgroundColor: color, borderColor: '#fff' }]}
             onPress={() => onAddRelation(member.id, 'child')}
-          >
-            <ThemedText style={styles.miniFabText}>+</ThemedText>
-          </Pressable>
-
-          {/* Add Sibling (Left) */}
-          <Pressable 
-            hitSlop={styles.hitSlop}
-            style={[
-              styles.miniFab,
-              styles.sideFab,
-              {
-                left: -12,
-                top: 34,
-                backgroundColor: isEditing ? color : '#64748b',
-              },
-            ]}
-            onPress={() => onAddRelation(member.id, 'sibling')}
           >
             <ThemedText style={styles.miniFabText}>+</ThemedText>
           </Pressable>
@@ -117,6 +120,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     shadowOpacity: 0.15,
     elevation: 3,
+  },
+  removeFab: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    top: -10,
+    left: -10,
+    zIndex: 12,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    borderWidth: 2,
+  },
+  removeFabText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+    marginTop: -2,
   },
   hitSlop: {
     top: 8,
