@@ -3,6 +3,7 @@ import { ThemedView } from '@/components/themed-view';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { FamilyService } from '@/services/family-service';
 import { Member } from '@/types/family';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
@@ -151,6 +152,12 @@ export default function MemberScreen() {
     return `${y}-${m}-${day}`;
   };
 
+  const commitDobValue = (date: Date) => {
+    const next = formatDate(date);
+    setDobInput(next);
+    setTempDob(date);
+  };
+
   const handleOpenDobPicker = () => {
     if (Platform.OS === 'web') return; // fallback to text input on web
     const base = dobInput ? new Date(dobInput) : new Date();
@@ -158,13 +165,28 @@ export default function MemberScreen() {
     setShowDobPicker(true);
   };
 
+  const handleDobPickerChange = (event: any, selectedDate?: Date) => {
+    if (selectedDate) {
+      if (Platform.OS === 'android' && event?.type === 'set') {
+        commitDobValue(selectedDate);
+      } else {
+        setTempDob(selectedDate);
+      }
+    }
+
+    if (Platform.OS === 'android') {
+      if (event?.type === 'set' || event?.type === 'dismissed') {
+        setShowDobPicker(false);
+      }
+    }
+  };
+
   const handleConfirmDob = () => {
     if (!tempDob) {
       setShowDobPicker(false);
       return;
     }
-    const next = formatDate(tempDob);
-    setDobInput(next);
+    commitDobValue(tempDob);
     setShowDobPicker(false);
   };
 
@@ -402,9 +424,21 @@ export default function MemberScreen() {
 
   if (!member) return <ThemedView style={styles.container}><ThemedText>Loading...</ThemedText></ThemedView>;
 
+  const handleBack = () => router.back();
+
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: member.name, headerTitleStyle: { fontWeight: '800' } }} />
+      <Stack.Screen
+        options={{
+          title: member.name,
+          headerTitleStyle: { fontWeight: '800' },
+          headerLeft: () => (
+            <Pressable onPress={handleBack} style={{ marginLeft: 12, padding: 6, borderRadius: 8 }}>
+              <Ionicons name="chevron-back" size={22} color={tint} />
+            </Pressable>
+          ),
+        }}
+      />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
         <View style={styles.header}>
@@ -573,7 +607,7 @@ export default function MemberScreen() {
                   value={tempDob || new Date()}
                   mode="date"
                   display="spinner"
-                  onChange={(_, d) => d && setTempDob(d)}
+                  onChange={handleDobPickerChange}
                   maximumDate={new Date()}
                 />
                 <View style={[styles.modalButtons, { marginTop: 16 }]}> 

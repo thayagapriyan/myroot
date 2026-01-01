@@ -1,6 +1,7 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TreeNode } from '@/components/tree/tree-node';
+import { ZoomPanContainer } from '@/components/zoom-pan-container';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { FamilyService } from '@/services/family-service';
 import { Member } from '@/types/family';
@@ -16,7 +17,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Dimensions, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Svg, { Line, Marker, Path } from 'react-native-svg';
 
-const { width: SCREEN_W } = Dimensions.get('window');
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 export default function TreeScreen() {
   const router = useRouter();
@@ -42,6 +43,10 @@ export default function TreeScreen() {
   const [exportText, setExportText] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
+  const [currentZoom, setCurrentZoom] = useState(1);
+  const [containerDims, setContainerDims] = useState({ width: SCREEN_W, height: SCREEN_H - 180 });
+
+  const zoomPanContainerRef = useRef<any>(null);
 
   const ensureDefaultMember = useCallback(async (userKey: string, list: Member[]) => {
     if (list.length > 0) return list;
@@ -314,6 +319,11 @@ export default function TreeScreen() {
     ]);
   };
 
+  const handleResetZoomPan = useCallback(() => {
+    zoomPanContainerRef.current?.reset?.();
+    setCurrentZoom(1);
+  }, []);
+
   const { layers, positions, edges, spouseEdges } = useMemo(() => {
     return calculateTreeLayout(members, SCREEN_W);
   }, [members]);
@@ -508,40 +518,71 @@ export default function TreeScreen() {
         }} 
       />
 
-      <ScrollView horizontal style={{ flex: 1 }} contentContainerStyle={{ width: contentWidth }}>
-        <ScrollView contentContainerStyle={{ height: contentHeight, paddingBottom: 96 }}>
-          <View style={{ flex: 1 }}>
-            <View style={styles.inlineControls}>
-              <View style={styles.inlineLeft}>
-                <Pressable
-                  disabled={members.length <= 1}
-                  onPress={() => setIsEditing((v) => !v)}
-                  style={[styles.topBtnPrimary, members.length <= 1 && { opacity: 0.45 }]}
-                >
-                  <ThemedText style={styles.topBtnPrimaryText}>{isEditing ? 'Done' : 'Edit'}</ThemedText>
-                </Pressable>
-                <Pressable
-                  onPress={handleReset}
-                  style={styles.topBtnDanger}
-                >
-                  <ThemedText style={styles.topBtnDangerText}>Reset</ThemedText>
-                </Pressable>
-              </View>
-              <View style={styles.inlineRight}>
-                <Pressable
-                  onPress={handleExportPress}
-                  style={styles.topBtnSecondary}
-                >
-                  <ThemedText style={styles.topBtnSecondaryText}>Export</ThemedText>
-                </Pressable>
-                <Pressable
-                  onPress={handleImportPress}
-                  style={styles.topBtnSecondary}
-                >
-                  <ThemedText style={styles.topBtnSecondaryText}>Import</ThemedText>
-                </Pressable>
-              </View>
-            </View>
+      <View style={[styles.inlineControls, { borderBottomColor: borderColor, backgroundColor: bgColor }]}>
+        <View style={styles.inlineLeft}>
+          <Pressable
+            disabled={members.length <= 1}
+            onPress={() => setIsEditing((v) => !v)}
+            style={[styles.topBtnPrimary, { backgroundColor: cardColor, borderColor: borderColor }, members.length <= 1 && { opacity: 0.45 }]}
+          >
+            <Ionicons name={isEditing ? "checkmark" : "pencil"} size={14} color={tint} />
+            <ThemedText style={[styles.topBtnPrimaryText, { color: tint }]}>{isEditing ? 'Done' : 'Edit'}</ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={handleReset}
+            style={[styles.topBtnDanger, { backgroundColor: cardColor, borderColor: borderColor }]}
+          >
+            <Ionicons name="refresh-outline" size={14} color="#FF3B30" />
+            <ThemedText style={styles.topBtnDangerText}>Reset</ThemedText>
+          </Pressable>
+        </View>
+        <View style={styles.inlineRight}>
+          <Pressable
+            onPress={handleResetZoomPan}
+            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
+          >
+            <Ionicons name="search-outline" size={14} color={textColor} />
+            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>
+              {currentZoom.toFixed(1)}x
+            </ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={handleExportPress}
+            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
+          >
+            <Ionicons name="share-outline" size={14} color={textColor} />
+            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>Export</ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={handleImportPress}
+            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
+          >
+            <Ionicons name="download-outline" size={14} color={textColor} />
+            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>Import</ThemedText>
+          </Pressable>
+        </View>
+      </View>
+
+      <View 
+        style={{ flex: 1 }} 
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          if (width > 0 && height > 0) {
+            setContainerDims({ width, height });
+          }
+        }}
+      >
+        <ZoomPanContainer
+          ref={zoomPanContainerRef}
+          contentWidth={contentWidth}
+          contentHeight={contentHeight}
+          containerWidth={containerDims.width}
+          containerHeight={containerDims.height}
+          minZoom={0.5}
+          maxZoom={3}
+          onZoomChange={setCurrentZoom}
+        >
+          <View style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }}>
             <Svg style={StyleSheet.absoluteFill} width={contentWidth} height={contentHeight}>
               {/* Define arrow marker */}
               <Marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
@@ -623,8 +664,8 @@ export default function TreeScreen() {
               );
             })}
           </View>
-        </ScrollView>
-      </ScrollView>
+        </ZoomPanContainer>
+      </View>
 
       {relationModal.open && (
         <View style={styles.overlay}>
@@ -779,71 +820,71 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   inlineControls: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
-    zIndex: 10,
-  },
-  inlineLeft: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  inlineRight: { flexDirection: 'row', gap: 8, alignItems: 'center', marginLeft: 'auto' },
-  topBtnPrimary: {
-    paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 999,
+    paddingVertical: 8,
+    gap: 8,
+    zIndex: 10,
+    borderBottomWidth: 1,
+  },
+  inlineLeft: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  inlineRight: { flexDirection: 'row', gap: 6, alignItems: 'center', marginLeft: 'auto' },
+  topBtnPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    gap: 4,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
+    shadowRadius: 2,
     elevation: 1,
   },
   topBtnPrimaryText: {
-    color: '#0A84FF',
-    fontWeight: '800',
-    fontSize: 12,
+    fontWeight: '700',
+    fontSize: 11,
   },
   topBtnDanger: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    gap: 4,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
+    shadowRadius: 2,
     elevation: 1,
   },
   topBtnDangerText: {
     color: '#FF3B30',
-    fontWeight: '800',
-    fontSize: 12,
+    fontWeight: '700',
+    fontSize: 11,
   },
   topBtnSecondary: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    gap: 4,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
+    shadowRadius: 2,
     elevation: 1,
   },
   topBtnSecondaryText: {
-    color: '#0f172a',
-    fontWeight: '800',
-    fontSize: 12,
+    fontWeight: '700',
+    fontSize: 11,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
