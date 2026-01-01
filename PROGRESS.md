@@ -80,6 +80,8 @@ If you'd like, I will now:
 - Add photo upload support (camera/gallery)
 - Add relation edit/remove UI
 - Add pan/zoom and animated transitions in `app/tree.tsx`
+- Allow adding new members directly from relation screen (Implemented 2025-12-19)
+- Switch tree view to hierarchical layout with better UI (Implemented 2025-12-19)
 
 ----
 I will keep this file updated as I continue work; ask me to add any other tracking fields you want (issues, estimated hours, test results).

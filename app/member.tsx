@@ -1,85 +1,119 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, Button, FlatList, Pressable, TextInput, Alert, Image } from 'react-native';
-import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { FamilyService } from '@/services/family-service';
+import { Member } from '@/types/family';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 const RELATION_TYPES = [
   'parent',
   'child',
   'spouse',
   'sibling',
-  'grandparent',
-  'grandchild',
-  'aunt/uncle',
-  'niece/nephew',
-  'cousin',
   'partner',
   'other',
 ];
 
 function reciprocal(type: string) {
   switch (type) {
-    case 'parent':
-      return 'child';
-    case 'child':
-      return 'parent';
-    case 'grandparent':
-      return 'grandchild';
-    case 'grandchild':
-      return 'grandparent';
-    case 'aunt/uncle':
-      return 'niece/nephew';
-    case 'niece/nephew':
-      return 'aunt/uncle';
+    case 'parent': return 'child';
+    case 'child': return 'parent';
     case 'spouse':
     case 'partner':
-      return type;
     case 'sibling':
-    case 'cousin':
       return type;
-    default:
-      return 'other';
+    default: return 'other';
   }
 }
 
 export default function MemberScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
-  const [members, setMembers] = useState<any[]>([]);
-  const [member, setMember] = useState<any>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [member, setMember] = useState<Member | null>(null);
   const [adding, setAdding] = useState(false);
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [customLabel, setCustomLabel] = useState('');
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editingCustom, setEditingCustom] = useState('');
-  const inputBg = useThemeColor({ light: '#fff', dark: '#222' }, 'background');
-  const border = useThemeColor({}, 'tint');
+  const [addNewMember, setAddNewMember] = useState(false);
+  const [newMemberName, setNewMemberName] = useState('');
+
+  const inputBg = useThemeColor({}, 'card');
+  const border = useThemeColor({}, 'border');
+  const tint = useThemeColor({}, 'tint');
+  const textColor = useThemeColor({}, 'text');
 
   useEffect(() => {
     (async () => {
       const userKey = await AsyncStorage.getItem('currentUser');
       if (!userKey) return router.replace('/login');
-      const familyKey = `${userKey}:family`;
-      const raw = await AsyncStorage.getItem(familyKey);
-      const list = raw ? JSON.parse(raw) : [];
+      const list = await FamilyService.getFamily(userKey);
       setMembers(list);
-      const found = list.find((m: any) => m.id === id);
-      setMember(found);
+      const found = list.find((m) => m.id === id);
+      setMember(found || null);
     })();
-  }, [id]);
+  }, [id, router]);
 
-  const saveMembers = async (list: any[]) => {
+  const saveMembers = async (list: Member[]) => {
     const userKey = await AsyncStorage.getItem('currentUser');
     if (!userKey) return router.replace('/login');
-    const familyKey = `${userKey}:family`;
-    await AsyncStorage.setItem(familyKey, JSON.stringify(list));
+    await FamilyService.saveFamily(userKey, list);
     setMembers(list);
-    const found = list.find((m: any) => m.id === id);
-    setMember(found);
+    const found = list.find((m) => m.id === id);
+    setMember(found || null);
+  };
+
+  const handlePickProfilePhoto = async () => {
+    if (!member) return;
+
+    try {
+      if (Platform.OS !== 'web') {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (perm.status !== 'granted') {
+          Alert.alert('Permission needed', 'Please allow photo library access to choose a profile picture.');
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+
+      if (result.canceled) return;
+      const uri = result.assets?.[0]?.uri;
+      if (!uri) return;
+
+      const list = [...members];
+      const idx = list.findIndex((m) => m.id === member.id);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], photo: uri };
+      }
+
+      // If this member is the current user's profile, also store the photo in the user record.
+      const currentKey = await AsyncStorage.getItem('currentUser');
+      if (currentKey) {
+        const userRaw = await AsyncStorage.getItem(currentKey);
+        const user = userRaw ? JSON.parse(userRaw) : null;
+        const isMe = !!user && ((user.email && member.email && user.email === member.email) || (user.name && user.name === member.name));
+        if (isMe) {
+          const nextUser = { ...user, photo: uri };
+          await AsyncStorage.setItem(currentKey, JSON.stringify(nextUser));
+        }
+      }
+
+      await saveMembers(list);
+    } catch {
+      Alert.alert('Error', 'Could not pick an image.');
+    }
   };
 
   const handleAddRelationTo = async (targetId: string) => {
@@ -96,18 +130,43 @@ export default function MemberScreen() {
     list[meIdx].relations = list[meIdx].relations || [];
     list[targetIdx].relations = list[targetIdx].relations || [];
 
-    // avoid duplicate same relation to same person
-    const exists = list[meIdx].relations.find((r: any) => r.targetId === targetId && r.type === type);
+    const exists = list[meIdx].relations!.find((r) => r.targetId === targetId && r.type === type);
     if (exists) return Alert.alert('Exists', 'This relation already exists');
 
-    list[meIdx].relations.push({ type, targetId });
+    list[meIdx].relations!.push({ type, targetId });
     const reciprocalType = reciprocal(type);
-    list[targetIdx].relations.push({ type: reciprocalType, targetId: member.id });
+    list[targetIdx].relations!.push({ type: reciprocalType, targetId: member.id });
 
     await saveMembers(list);
     setAdding(false);
     setSelectedType(null);
     setCustomLabel('');
+  };
+
+  const handleAddNewMember = async () => {
+    if (!member || !newMemberName.trim()) return Alert.alert('Name required');
+    const type = selectedType === 'other' ? customLabel || 'other' : selectedType;
+    if (!type) return Alert.alert('Select relation type');
+
+    const list = [...members];
+    const meIdx = list.findIndex((m) => m.id === member.id);
+    if (meIdx === -1) return Alert.alert('Error', 'Member not found');
+
+    const newId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const newMember: Member = { id: newId, name: newMemberName.trim(), relations: [] };
+    list.push(newMember);
+
+    list[meIdx].relations = list[meIdx].relations || [];
+    list[meIdx].relations!.push({ type, targetId: newId });
+    const reciprocalType = reciprocal(type);
+    newMember.relations!.push({ type: reciprocalType, targetId: member.id });
+
+    await saveMembers(list);
+    setAdding(false);
+    setSelectedType(null);
+    setCustomLabel('');
+    setAddNewMember(false);
+    setNewMemberName('');
   };
 
   const handleStartEdit = (index: number) => {
@@ -131,19 +190,17 @@ export default function MemberScreen() {
     if (!rel) return Alert.alert('Error', 'Relation not found');
     const targetId = rel.targetId;
 
-    // update this relation
-    list[meIdx].relations[editingIndex].type = newType;
+    list[meIdx].relations![editingIndex].type = newType;
 
-    // update reciprocal relation on target
     const targetIdx = list.findIndex((m) => m.id === targetId);
     if (targetIdx !== -1) {
       list[targetIdx].relations = list[targetIdx].relations || [];
-      const recIdx = list[targetIdx].relations.findIndex((r: any) => r.targetId === member.id);
+      const recIdx = list[targetIdx].relations!.findIndex((r) => r.targetId === member.id);
       const recType = reciprocal(newType);
       if (recIdx !== -1) {
-        list[targetIdx].relations[recIdx].type = recType;
+        list[targetIdx].relations![recIdx].type = recType;
       } else {
-        list[targetIdx].relations.push({ type: recType, targetId: member.id });
+        list[targetIdx].relations!.push({ type: recType, targetId: member.id });
       }
     }
 
@@ -155,122 +212,202 @@ export default function MemberScreen() {
 
   const handleRemoveRelation = (index: number) => {
     if (!member) return;
+
+    const performRemove = async () => {
+      const list = [...members];
+      const meIdx = list.findIndex((m) => m.id === member.id);
+      if (meIdx === -1) return;
+      const rel = list[meIdx].relations?.[index];
+      if (!rel) return;
+      const targetId = rel.targetId;
+      list[meIdx].relations = list[meIdx].relations!.filter((_, i) => i !== index);
+      const targetIdx = list.findIndex((m) => m.id === targetId);
+      if (targetIdx !== -1) {
+        list[targetIdx].relations = (list[targetIdx].relations || []).filter((r) => r.targetId !== member.id);
+      }
+      await saveMembers(list);
+    };
+
+    if (Platform.OS === 'web') {
+      if (confirm('Are you sure you want to remove this relation?')) {
+        performRemove();
+      }
+      return;
+    }
+
     Alert.alert('Remove relation', 'Are you sure you want to remove this relation?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',
         style: 'destructive',
-        onPress: async () => {
-          const list = [...members];
-          const meIdx = list.findIndex((m) => m.id === member.id);
-          if (meIdx === -1) return;
-          const rel = list[meIdx].relations?.[index];
-          if (!rel) return;
-          const targetId = rel.targetId;
-          // remove from me
-          list[meIdx].relations = list[meIdx].relations.filter((_: any, i: number) => i !== index);
-          // remove reciprocal from target
-          const targetIdx = list.findIndex((m) => m.id === targetId);
-          if (targetIdx !== -1) {
-            list[targetIdx].relations = (list[targetIdx].relations || []).filter((r: any) => r.targetId !== member.id);
-          }
-          await saveMembers(list);
-        },
+        onPress: performRemove,
       },
     ]);
   };
 
-  if (!member) return (
-    <ThemedView style={styles.container}><ThemedText>Loading...</ThemedText></ThemedView>
-  );
+  if (!member) return <ThemedView style={styles.container}><ThemedText>Loading...</ThemedText></ThemedView>;
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: member.name }} />
-      {member.photo ? <Image source={{ uri: member.photo }} style={styles.avatar} /> : null}
-      <ThemedText style={styles.name}>{member.name}</ThemedText>
-      <ThemedText>{member.dob}</ThemedText>
+      <Stack.Screen options={{ title: member.name, headerTitleStyle: { fontWeight: '800' } }} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        
+        <View style={styles.header}>
+          <Pressable onPress={handlePickProfilePhoto} style={[styles.avatarLarge, { backgroundColor: tint + '20', borderColor: tint }]}>
+            {member.photo ? (
+              <Image source={{ uri: member.photo }} style={styles.avatarImg} />
+            ) : (
+              <ThemedText style={{ color: tint, fontSize: 40, fontWeight: '800' }}>{member.name.charAt(0)}</ThemedText>
+            )}
+          </Pressable>
+          <ThemedText style={styles.profileName}>{member.name}</ThemedText>
+          {member.dob && <ThemedText style={styles.profileDob}>Born: {member.dob}</ThemedText>}
+        </View>
 
-      <View style={{ height: 12 }} />
-      <ThemedText style={{ fontWeight: '600' }}>Relations</ThemedText>
-      {(member.relations || []).length === 0 ? <ThemedText style={{ marginVertical: 8 }}>No relations yet</ThemedText> : (
-        <FlatList data={member.relations} keyExtractor={(r: any, i) => `${r.targetId}-${i}`} renderItem={({ item, index }) => {
-          const target = members.find((m) => m.id === item.targetId);
-          return (
-            <View style={[styles.relationRow, { borderBottomColor: border }]}>
-              <View style={{ flex: 1 }}>
-                <ThemedText style={{ fontWeight: '600' }}>{item.type}</ThemedText>
-                <ThemedText style={{ marginTop: 2 }}>{target ? target.name : item.targetId}</ThemedText>
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <ThemedText style={styles.sectionTitle}>Relationships</ThemedText>
+            <Pressable style={[styles.addButton, { backgroundColor: tint }]} onPress={() => setAdding(true)}>
+              <ThemedText style={styles.addButtonText}>+ Add</ThemedText>
+            </Pressable>
+          </View>
+
+          {member.relations && member.relations.length > 0 ? (
+            member.relations.map((rel, idx) => {
+              const target = members.find(m => m.id === rel.targetId);
+              return (
+                <View key={idx} style={[styles.relationCard, { backgroundColor: inputBg, borderColor: border }]}>
+                  <View style={[styles.avatarSmall, { backgroundColor: tint + '20' }]}>
+                    {target?.photo ? <Image source={{ uri: target.photo }} style={styles.avatarImg} /> : <ThemedText style={{ color: tint, fontWeight: '700' }}>{target?.name.charAt(0) || '?'}</ThemedText>}
+                  </View>
+                  <View style={styles.relationInfo}>
+                    <ThemedText style={styles.relationName}>{target?.name || 'Unknown'}</ThemedText>
+                    <ThemedText style={styles.relationType}>{rel.type}</ThemedText>
+                  </View>
+                  <View style={styles.relationActions}>
+                    <Pressable onPress={() => handleStartEdit(idx)} style={styles.actionBtn}>
+                      <ThemedText style={{ color: tint }}>Edit</ThemedText>
+                    </Pressable>
+                    <Pressable onPress={() => handleRemoveRelation(idx)} style={styles.actionBtn}>
+                      <ThemedText style={{ color: '#ef4444' }}>Remove</ThemedText>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })
+          ) : (
+            <ThemedText style={styles.emptyText}>No relationships added yet.</ThemedText>
+          )}
+        </View>
+
+        {adding && (
+          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+            <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
+              <ThemedText style={styles.modalTitle}>Add Relationship</ThemedText>
+              
+              <ThemedText style={styles.label}>Relation Type</ThemedText>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+                {RELATION_TYPES.map(t => (
+                  <Pressable key={t} style={[styles.chip, selectedType === t && { backgroundColor: tint, borderColor: tint }, { borderColor: border }]} onPress={() => setSelectedType(t)}>
+                    <ThemedText style={[styles.chipText, selectedType === t && { color: '#fff' }]}>{t}</ThemedText>
+                  </Pressable>
+                ))}
+              </ScrollView>
+
+              <View style={styles.toggleContainer}>
+                <Pressable style={[styles.toggle, !addNewMember && { backgroundColor: tint }]} onPress={() => setAddNewMember(false)}>
+                  <ThemedText style={[styles.toggleText, !addNewMember && { color: '#fff' }]}>Existing</ThemedText>
+                </Pressable>
+                <Pressable style={[styles.toggle, addNewMember && { backgroundColor: tint }]} onPress={() => setAddNewMember(true)}>
+                  <ThemedText style={[styles.toggleText, addNewMember && { color: '#fff' }]}>New</ThemedText>
+                </Pressable>
               </View>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <Pressable onPress={() => handleStartEdit(index)} style={styles.actionButton}>
-                  <ThemedText style={{ color: '#0a84ff' }}>Edit</ThemedText>
-                </Pressable>
-                <Pressable onPress={() => handleRemoveRelation(index)} style={styles.actionButton}>
-                  <ThemedText style={{ color: '#ff3b30' }}>Remove</ThemedText>
-                </Pressable>
+
+              {addNewMember ? (
+                <TextInput 
+                  placeholder="Name" 
+                  placeholderTextColor="#94a3b8" 
+                  style={[styles.input, { borderColor: border, color: textColor }]} 
+                  value={newMemberName} 
+                  onChangeText={setNewMemberName} 
+                />
+              ) : (
+                <ScrollView style={styles.memberList}>
+                  {members.filter(m => m.id !== member.id).map(m => (
+                    <Pressable key={m.id} style={styles.memberRow} onPress={() => handleAddRelationTo(m.id)}>
+                      <ThemedText>{m.name}</ThemedText>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
+
+              <View style={styles.modalButtons}>
+                {addNewMember && <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleAddNewMember}><ThemedText style={{ color: '#fff' }}>Save</ThemedText></Pressable>}
+                <Pressable style={styles.modalBtn} onPress={() => setAdding(false)}><ThemedText>Cancel</ThemedText></Pressable>
               </View>
             </View>
-          );
-        }} />
-      )}
-
-      <View style={{ height: 12 }} />
-      {!adding ? (
-        <Button title="Add relation" onPress={() => setAdding(true)} />
-      ) : (
-        <View>
-          <ThemedText style={{ fontWeight: '600', marginBottom: 6 }}>Choose relation type</ThemedText>
-          <FlatList data={RELATION_TYPES} keyExtractor={(t) => t} renderItem={({ item }) => (
-            <Pressable style={[styles.typeRow, { borderBottomColor: border }]} onPress={() => setSelectedType(item)}>
-              <ThemedText style={{ fontWeight: selectedType === item ? '700' : '400' }}>{item}</ThemedText>
-            </Pressable>
-          )} />
-          {selectedType === 'other' ? (
-            <TextInput placeholder="Custom label" placeholderTextColor="#888" style={[styles.input, { backgroundColor: inputBg, borderColor: border }]} value={customLabel} onChangeText={setCustomLabel} />
-          ) : null}
-          <ThemedText style={{ fontWeight: '600', marginTop: 8 }}>Choose target member</ThemedText>
-          <FlatList data={members.filter(m => m.id !== member.id)} keyExtractor={(m) => m.id} renderItem={({ item }) => (
-            <Pressable style={[styles.targetRow, { borderBottomColor: border }]} onPress={() => handleAddRelationTo(item.id)}>
-              {item.photo ? <Image source={{ uri: item.photo }} style={styles.thumb} /> : null}
-              <ThemedText style={{ marginLeft: 8 }}>{item.name}</ThemedText>
-            </Pressable>
-          )} />
-          <View style={{ height: 8 }} />
-          <Button title="Cancel" onPress={() => { setAdding(false); setSelectedType(null); setCustomLabel(''); }} />
-        </View>
-      )}
-
-      {/* Edit relation UI */}
-      {editingIndex !== null ? (
-        <View style={{ marginTop: 12 }}>
-          <ThemedText style={{ fontWeight: '600', marginBottom: 6 }}>Edit relation</ThemedText>
-          <FlatList data={RELATION_TYPES} keyExtractor={(t) => t} renderItem={({ item }) => (
-            <Pressable style={[styles.typeRow, { borderBottomColor: border }]} onPress={() => setEditingType(item)}>
-              <ThemedText style={{ fontWeight: editingType === item ? '700' : '400' }}>{item}</ThemedText>
-            </Pressable>
-          )} />
-          {editingType === 'other' ? (
-            <TextInput placeholder="Custom label" placeholderTextColor="#888" style={[styles.input, { backgroundColor: inputBg, borderColor: border }]} value={editingCustom} onChangeText={setEditingCustom} />
-          ) : null}
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-            <Button title="Save" onPress={handleSaveEdit} />
-            <Button title="Cancel" onPress={() => { setEditingIndex(null); setEditingType(null); setEditingCustom(''); }} />
           </View>
-        </View>
-      ) : null}
+        )}
+
+        {editingIndex !== null && (
+          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+            <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
+              <ThemedText style={styles.modalTitle}>Edit Relationship</ThemedText>
+              <ThemedText style={styles.label}>Relation Type</ThemedText>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+                {RELATION_TYPES.map(t => (
+                  <Pressable key={t} style={[styles.chip, editingType === t && { backgroundColor: tint, borderColor: tint }, { borderColor: border }]} onPress={() => setEditingType(t)}>
+                    <ThemedText style={[styles.chipText, editingType === t && { color: '#fff' }]}>{t}</ThemedText>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <View style={styles.modalButtons}>
+                <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleSaveEdit}><ThemedText style={{ color: '#fff' }}>Save</ThemedText></Pressable>
+                <Pressable style={styles.modalBtn} onPress={() => setEditingIndex(null)}><ThemedText>Cancel</ThemedText></Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
+      </ScrollView>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16 },
-  avatar: { width: 120, height: 120, borderRadius: 60, marginBottom: 8 },
-  name: { fontSize: 20, fontWeight: '600' },
-  relationRow: { flexDirection: 'row', paddingVertical: 8, alignItems: 'center' },
-  typeRow: { padding: 10, borderBottomWidth: 1 },
-  input: { borderWidth: 1, borderRadius: 8, padding: 8, marginVertical: 8 },
-  targetRow: { flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: 1 },
-  thumb: { width: 36, height: 36, borderRadius: 18 },
-  actionButton: { paddingHorizontal: 8, paddingVertical: 4 },
+  container: { flex: 1 },
+  scrollContent: { padding: 20 },
+  header: { alignItems: 'center', marginBottom: 32 },
+  avatarLarge: { width: 120, height: 120, borderRadius: 60, borderWidth: 4, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginBottom: 16 },
+  avatarImg: { width: '100%', height: '100%' },
+  profileName: { fontSize: 24, fontWeight: '800' },
+  profileDob: { fontSize: 14, color: '#64748b', marginTop: 4 },
+  section: { marginBottom: 24 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sectionTitle: { fontSize: 18, fontWeight: '700' },
+  addButton: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  addButtonText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  relationCard: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, borderWidth: 1, marginBottom: 12 },
+  avatarSmall: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginRight: 12 },
+  relationInfo: { flex: 1 },
+  relationName: { fontSize: 16, fontWeight: '600' },
+  relationType: { fontSize: 12, color: '#64748b', textTransform: 'capitalize' },
+  relationActions: { flexDirection: 'row', gap: 8 },
+  actionBtn: { padding: 4 },
+  emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 20 },
+  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: 20, zIndex: 100 },
+  modalContent: { borderRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
+  modalTitle: { fontSize: 20, fontWeight: '800', marginBottom: 20 },
+  label: { fontSize: 14, fontWeight: '600', color: '#64748b', marginBottom: 8 },
+  chipScroll: { flexDirection: 'row', marginBottom: 16 },
+  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, marginRight: 8 },
+  chipText: { fontSize: 12, fontWeight: '600' },
+  toggleContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 12, padding: 4, marginBottom: 16 },
+  toggle: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
+  toggleText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
+  input: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 16 },
+  memberList: { maxHeight: 200, marginBottom: 16 },
+  memberRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
+  modalBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
 });
