@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "myroot",
-    "slug": "myroot",
+    "name": "family-tree",
+    "slug": "family-tree",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myroot",
+    "scheme": "family-tree",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
