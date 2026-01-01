@@ -18,6 +18,9 @@ This project is an **Expo Router + React Native + TypeScript** app for managing 
 - `eslint.config.js`
   - Lint rules.
 
+- `expo-env.d.ts`
+  - TypeScript declarations for Expo environment variables.
+
 - `README.md`
   - Project setup and basic usage.
 
@@ -73,20 +76,32 @@ This project is an **Expo Router + React Native + TypeScript** app for managing 
   - Allows adding/removing/editing relationships.
   - Allows choosing a **profile picture** (saved into member `photo`).
 
+- `app/add-member.tsx`
+  - Screen for adding a new member.
+
 - `app/add-relation.tsx`
   - Full-screen flow to add a relationship between members.
-  - Uses a fixed list of “direct” relationship types (parent/child/spouse/sibling/partner/other).
+  - Uses a fixed list of "direct" relationship types (parent/child/spouse/sibling/partner/other).
+
+- `app/modal.tsx`
+  - Modal screen for various overlays.
 
 - `app/profile.tsx`
-  - “My profile” route.
+  - "My profile" route.
   - Redirects the user to their corresponding Member screen (or tree if not found).
 
 - `app/(tabs)/_layout.tsx`
-  - A route-group layout.
-  - This project previously used tabs; now it’s used to avoid bottom navigation UI.
+  - A route-group layout for tab navigation.
+  - This project uses tabs for some sections.
 
-- `app/(modal)/...`
-  - Optional modal routes (if present/used).
+- `app/(tabs)/index.tsx`
+  - Tab index screen.
+
+- `app/(tabs)/profile.tsx`
+  - Tab profile screen.
+
+- `app/(modal)/add-relation.tsx`
+  - Modal route for adding relations.
 
 ---
 
@@ -103,10 +118,23 @@ This project is an **Expo Router + React Native + TypeScript** app for managing 
 - `components/themed-text.tsx`
   - Theme-aware text component.
 
+- `components/external-link.tsx`
+  - Component for external links.
+
+- `components/haptic-tab.tsx`
+  - Haptic feedback for tabs.
+
+- `components/hello-wave.tsx`
+  - Hello wave component.
+
+- `components/parallax-scroll-view.tsx`
+  - Parallax scroll view component.
+
 - `components/tree/tree-node.tsx`
   - Renders one person node in the tree:
     - Avatar + name pill
-    - “+” buttons for adding child/sibling/spouse (when actions are shown)
+    - "+" buttons for adding child/sibling/spouse (when actions are shown)
+    - "-" button for deletion in edit mode
 
 - `components/ui/*`
   - Generic UI pieces (collapsible, icon components, etc.).
@@ -174,6 +202,7 @@ This project is an **Expo Router + React Native + TypeScript** app for managing 
 **Key files:**
 - `hooks/use-theme-color.ts`
 - `hooks/use-color-scheme.ts`
+- `hooks/use-color-scheme.web.ts`
 
 ---
 
@@ -197,7 +226,12 @@ This project is an **Expo Router + React Native + TypeScript** app for managing 
   - Utility script for resetting project state.
 
 ---
+## Folder: `notes/` (Documentation)
 
+- `notes/PROJECT_STRUCTURE.md`
+  - This file: detailed project structure and file purposes.
+
+---
 ## “Big picture” user flows
 
 - Login → sets `currentUser`.
