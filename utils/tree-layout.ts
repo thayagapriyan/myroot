@@ -153,9 +153,9 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
 
   // Position nodes
   const positions: Record<string, { x: number; y: number }> = {};
-  const levelHeight = 190;
-  const unitGap = 240;
-  const memberGap = 185;
+  const levelHeight = 220;
+  const unitGap = 260;
+  const memberGap = 190;
   const minLeft = 40;
   const nodeWidth = 140;
   const nodeHeight = 100;
@@ -281,50 +281,86 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
     const layer = unitLayers[depth] || [];
     if (!layer.length) continue;
 
+    // Group units by their parent set to handle siblings as a block
+    const siblingGroups = new Map<string, string[]>();
+    layer.forEach(u => {
+      const parents = Array.from(parentUnitsOf.get(u) || []).sort().join(':');
+      const group = siblingGroups.get(parents) || [];
+      group.push(u);
+      siblingGroups.set(parents, group);
+    });
+
     const targetX = new Map<string, number>();
-    layer.forEach((u, idx) => {
-      const parents = parentUnitsOf.get(u);
-      if (parents && parents.size) {
-        const xs = Array.from(parents)
-          .map((p) => unitMidX(p))
-          .filter((x): x is number => typeof x === 'number');
+    
+    siblingGroups.forEach((siblings, parentKey) => {
+      let groupCenter = 0;
+      if (parentKey) {
+        const parentUnits = parentKey.split(':');
+        const xs = parentUnits
+          .map(p => unitMidX(p))
+          .filter(x => typeof x === 'number');
         if (xs.length) {
-          // Convert desired center into desired anchor-left, centering the whole unit (spouse group) under its parents.
-          const center = xs.reduce((a, b) => a + b, 0) / xs.length;
-          targetX.set(u, center - unitWidth(u) / 2);
-          return;
+          groupCenter = xs.reduce((a, b) => a + b, 0) / xs.length;
+        } else {
+          groupCenter = layer.indexOf(siblings[0]) * unitGap;
         }
+      } else {
+        groupCenter = layer.indexOf(siblings[0]) * unitGap;
       }
-      targetX.set(u, idx * unitGap);
+
+      // Calculate total width of this sibling group
+      const totalGroupWidth = siblings.reduce((sum, u, i) => {
+        return sum + unitWidth(u) + (i < siblings.length - 1 ? unitGap : 0);
+      }, 0);
+
+      // Start position for the first sibling in the group to center the whole group
+      let currentX = groupCenter - totalGroupWidth / 2;
+      siblings.forEach(u => {
+        targetX.set(u, currentX);
+        currentX += unitWidth(u) + unitGap;
+      });
     });
 
-    // Sort by target position (and stable fallback to previous order).
-    layer.sort((a, b) => {
-      const da = targetX.get(a) ?? 0;
-      const db = targetX.get(b) ?? 0;
-      if (da !== db) return da - db;
-      return (unitOrderIndex.get(a) ?? 0) - (unitOrderIndex.get(b) ?? 0);
-    });
+    // Sort by target position
+    layer.sort((a, b) => (targetX.get(a) ?? 0) - (targetX.get(b) ?? 0));
 
-    // Collision resolution within the layer, using full unit bounds (not symmetric half-width).
-    const minGap = 110;
+    // Collision resolution: spread out from the center if possible, but for now keep simple shift
     let prevRight = -Infinity;
     layer.forEach((u) => {
-      const desiredAnchorLeft = targetX.get(u) ?? 0;
-      const bounds = unitBounds(u, desiredAnchorLeft);
-      const minAllowedLeft = prevRight === -Infinity ? bounds.left : prevRight + minGap;
-      const finalLeft = Math.max(bounds.left, minAllowedLeft);
+      const desiredLeft = targetX.get(u) ?? 0;
+      const minAllowedLeft = prevRight === -Infinity ? desiredLeft : prevRight + 60; // small gap between units
+      const finalLeft = Math.max(desiredLeft, minAllowedLeft);
       unitX.set(u, finalLeft);
-      prevRight = unitBounds(u, finalLeft).right;
+      prevRight = finalLeft + unitWidth(u);
     });
+  }
 
-    // Avoid re-centering layers to screen width (reduces large jumps when a spouse is added).
-    // Only ensure a minimum left padding.
-    const minX = Math.min(...layer.map((u) => unitX.get(u) ?? 0));
-    if (minX < minLeft) {
-      const shift = minLeft - minX;
-      layer.forEach((u) => unitX.set(u, (unitX.get(u) ?? 0) + shift));
-    }
+  // Bottom-up pass to center parents over their children
+  for (let depth = unitLayers.length - 2; depth >= 0; depth--) {
+    const layer = unitLayers[depth] || [];
+    layer.forEach(u => {
+      const childrenUnits = Array.from(childUnitsOf.get(u) || []);
+      if (childrenUnits.length > 0) {
+        const childXs = childrenUnits.map(cu => unitX.get(cu) ?? 0 + unitWidth(cu) / 2);
+        const childrenCenter = childXs.reduce((a, b) => a + b, 0) / childXs.length;
+        const desiredLeft = childrenCenter - unitWidth(u) / 2;
+        
+        // Only move if it doesn't cause immediate collision with left neighbor
+        // This is a simple heuristic; a full collision resolution would be better
+        unitX.set(u, desiredLeft);
+      }
+    });
+    
+    // Re-resolve collisions for this layer after moving parents
+    let prevRight = -Infinity;
+    layer.sort((a, b) => (unitX.get(a) ?? 0) - (unitX.get(b) ?? 0));
+    layer.forEach(u => {
+      const currentLeft = unitX.get(u) ?? 0;
+      const minAllowedLeft = prevRight === -Infinity ? currentLeft : prevRight + 60;
+      const finalLeft = Math.max(currentLeft, minAllowedLeft);
+      unitX.set(u, finalLeft);
+      prevRight = finalLeft + unitWidth(u);
+    });
   }
 
   // Finally, place individual members within each spouse-unit side-by-side.

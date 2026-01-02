@@ -16,7 +16,7 @@ import * as Sharing from 'expo-sharing';
 import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Dimensions, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import Svg, { Line, Marker, Path } from 'react-native-svg';
+import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -470,9 +470,16 @@ export default function TreeScreen() {
   };
 
   const handleResetZoomPan = useCallback(() => {
-    zoomPanContainerRef.current?.reset?.();
-    setCurrentZoom(1);
-  }, []);
+    const rootMember = members[0];
+    if (rootMember && centeredPositions[rootMember.id]) {
+      const pos = centeredPositions[rootMember.id];
+      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.5);
+      setCurrentZoom(0.5);
+    } else {
+      zoomPanContainerRef.current?.reset?.();
+      setCurrentZoom(1);
+    }
+  }, [members, centeredPositions]);
 
   const { layers, positions, edges, spouseEdges } = useMemo(() => {
     return calculateTreeLayout(members, SCREEN_W);
@@ -481,7 +488,7 @@ export default function TreeScreen() {
   const { centeredPositions, contentWidth, contentHeight } = useMemo(() => {
     const nodeW = 140;
     const nodeH = 100;
-    const pad = 260;
+    const pad = 200; // Reduced padding to keep tree closer to start
     const pts = Object.values(positions);
     if (!pts.length) {
       return { centeredPositions: positions, contentWidth: SCREEN_W, contentHeight: 800 };
@@ -492,10 +499,15 @@ export default function TreeScreen() {
     const maxY = Math.max(...pts.map((p) => p.y));
     const layoutWidth = maxX - minX + nodeW;
     const layoutHeight = maxY - minY + nodeH;
-    const width = Math.max(SCREEN_W, layoutWidth + pad);
+    
+    // Content size should be exactly the layout size plus small padding
+    const width = layoutWidth + pad * 2;
     const height = Math.max(800, layoutHeight + pad);
-    const offsetX = (width - layoutWidth) / 2 - minX;
-    const offsetY = Math.max(0, (height - layoutHeight) / 4 - minY); // gentle vertical centering
+    
+    // Offset to center the layout within the contentWidth
+    const offsetX = pad - minX;
+    const offsetY = 60 - minY; // align to top with some padding
+    
     const shifted: typeof positions = {};
     Object.entries(positions).forEach(([id, p]) => {
       shifted[id] = { x: p.x + offsetX, y: p.y + offsetY };
@@ -740,14 +752,11 @@ export default function TreeScreen() {
           minZoom={0.5}
           maxZoom={3}
           onZoomChange={setCurrentZoom}
+          initialFocusX={members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].x + 70 : undefined}
+          initialFocusY={members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].y + 40 : undefined}
         >
           <View style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }}>
             <Svg style={StyleSheet.absoluteFill} width={contentWidth} height={contentHeight}>
-              {/* Define arrow marker */}
-              <Marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
-                <Path d="M 0 0 L 10 5 L 0 10 z" fill={tint} />
-              </Marker>
-
               {/* Spouse Edges */}
               {spouseEdges.map((e, i) => {
                 const a = centeredPositions[e.from];
