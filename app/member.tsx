@@ -46,9 +46,12 @@ export default function MemberScreen() {
   const [editingCustom, setEditingCustom] = useState('');
   const [addNewMember, setAddNewMember] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberSex, setNewMemberSex] = useState<'Male' | 'Female' | 'Other'>('Male');
+  const [newMemberDob, setNewMemberDob] = useState('');
   const [sexInput, setSexInput] = useState('');
   const [dobInput, setDobInput] = useState('');
   const [showDobPicker, setShowDobPicker] = useState(false);
+  const [pickerSource, setPickerSource] = useState<'profile' | 'adding'>('profile');
   const [tempDob, setTempDob] = useState<Date | null>(null);
 
   const inputBg = useThemeColor({}, 'card');
@@ -173,25 +176,32 @@ export default function MemberScreen() {
     setTempDob(date);
   };
 
-  const handleOpenDobPicker = () => {
-    if (Platform.OS === 'web') return; // fallback to text input on web
-    const base = dobInput ? new Date(dobInput) : new Date();
+  const handleOpenDobPicker = (source: 'profile' | 'adding' = 'profile') => {
+    if (Platform.OS === 'web') return;
+    setPickerSource(source);
+    const currentVal = source === 'profile' ? dobInput : newMemberDob;
+    const base = currentVal ? new Date(currentVal) : new Date();
     setTempDob(Number.isNaN(base.getTime()) ? new Date() : base);
     setShowDobPicker(true);
   };
 
   const handleDobPickerChange = (event: any, selectedDate?: Date) => {
-    if (selectedDate) {
-      if (Platform.OS === 'android' && event?.type === 'set') {
-        commitDobValue(selectedDate);
-      } else {
-        setTempDob(selectedDate);
-      }
-    }
-
     if (Platform.OS === 'android') {
-      if (event?.type === 'set' || event?.type === 'dismissed') {
+      if (event.type === 'set' && selectedDate) {
+        setTempDob(selectedDate);
+        const formatted = formatDate(selectedDate);
+        if (pickerSource === 'profile') {
+          setDobInput(formatted);
+        } else {
+          setNewMemberDob(formatted);
+        }
         setShowDobPicker(false);
+      } else if (event.type === 'dismissed') {
+        setShowDobPicker(false);
+      }
+    } else {
+      if (selectedDate) {
+        setTempDob(selectedDate);
       }
     }
   };
@@ -201,7 +211,12 @@ export default function MemberScreen() {
       setShowDobPicker(false);
       return;
     }
-    commitDobValue(tempDob);
+    const formatted = formatDate(tempDob);
+    if (pickerSource === 'profile') {
+      setDobInput(formatted);
+    } else {
+      setNewMemberDob(formatted);
+    }
     setShowDobPicker(false);
   };
 
@@ -275,7 +290,14 @@ export default function MemberScreen() {
     if (meIdx === -1) return Alert.alert('Error', 'Member not found');
 
     const newId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const newMember: Member = { id: newId, name: newMemberName.trim(), relations: [] };
+    const newMember: Member = { 
+      id: newId, 
+      name: newMemberName.trim(), 
+      sex: newMemberSex,
+      dob: newMemberDob || undefined,
+      age: computeAge(newMemberDob) || undefined,
+      relations: [] 
+    };
     list.push(newMember);
 
     list[meIdx].relations = list[meIdx].relations || [];
@@ -289,6 +311,8 @@ export default function MemberScreen() {
     setCustomLabel('');
     setAddNewMember(false);
     setNewMemberName('');
+    setNewMemberSex('Male');
+    setNewMemberDob('');
   };
 
   const handleStartEdit = (index: number) => {
@@ -472,7 +496,7 @@ export default function MemberScreen() {
           <ThemedText style={styles.sectionTitle}>Profile</ThemedText>
           <ThemedText style={styles.label}>Sex</ThemedText>
           <View style={styles.sexRow}>
-            {['Male', 'Female'].map((opt) => (
+            {['Male', 'Female', 'Other'].map((opt) => (
               <Pressable
                 key={opt}
                 style={[styles.sexChip, sexInput === opt && { backgroundColor: tint, borderColor: tint }]}
@@ -491,7 +515,7 @@ export default function MemberScreen() {
               style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
             />
           ) : (
-            <Pressable onPress={handleOpenDobPicker}>
+            <Pressable onPress={() => handleOpenDobPicker('profile')}>
               <TextInput
                 placeholder="DOB (YYYY-MM-DD)"
                 placeholderTextColor="#94a3b8"
@@ -562,9 +586,11 @@ export default function MemberScreen() {
             <ThemedText style={styles.summaryValue}>{derivedRelations.nephews.map((m) => m.name).join(', ') || '—'}</ThemedText>
           </View>
         </View>
+      </ScrollView>
 
-        {adding && (
-          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+      {adding && (
+        <Modal transparent animationType="fade" visible={adding} onRequestClose={() => setAdding(false)}>
+          <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
               <ThemedText style={styles.modalTitle}>Add Relationship</ThemedText>
               
@@ -587,58 +613,72 @@ export default function MemberScreen() {
               </View>
 
               {addNewMember ? (
-                <TextInput 
-                  placeholder="Name" 
-                  placeholderTextColor="#94a3b8" 
-                  style={[styles.input, { borderColor: border, color: textColor }]} 
-                  value={newMemberName} 
-                  onChangeText={setNewMemberName} 
-                />
+                <View>
+                  <TextInput 
+                    placeholder="Name" 
+                    placeholderTextColor="#94a3b8" 
+                    style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]} 
+                    value={newMemberName} 
+                    onChangeText={setNewMemberName} 
+                  />
+                  
+                  <ThemedText style={styles.label}>Sex</ThemedText>
+                  <View style={styles.sexRow}>
+                    {['Male', 'Female', 'Other'].map((opt) => (
+                      <Pressable
+                        key={opt}
+                        style={[styles.sexChip, newMemberSex === opt && { backgroundColor: tint, borderColor: tint }]}
+                        onPress={() => setNewMemberSex(opt as any)}
+                      >
+                        <ThemedText style={[styles.sexChipText, newMemberSex === opt && { color: '#fff' }]}>{opt}</ThemedText>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  <ThemedText style={styles.label}>Date of Birth</ThemedText>
+                  {Platform.OS === 'web' ? (
+                    <TextInput
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor="#94a3b8"
+                      value={newMemberDob}
+                      onChangeText={setNewMemberDob}
+                      style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+                    />
+                  ) : (
+                    <Pressable onPress={() => handleOpenDobPicker('adding')}>
+                      <TextInput
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor="#94a3b8"
+                        value={newMemberDob}
+                        editable={false}
+                        style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0', pointerEvents: 'none' }]}
+                      />
+                    </Pressable>
+                  )}
+                </View>
               ) : (
                 <ScrollView style={styles.memberList}>
                   {members.filter(m => m.id !== member.id).map(m => (
                     <Pressable key={m.id} style={styles.memberRow} onPress={() => handleAddRelationTo(m.id)}>
-                      <ThemedText>{m.name}</ThemedText>
+                      <ThemedText style={{ color: textColor }}>{m.name}</ThemedText>
                     </Pressable>
                   ))}
                 </ScrollView>
               )}
 
               <View style={styles.modalButtons}>
-                {addNewMember && <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleAddNewMember}><ThemedText style={{ color: '#fff' }}>Save</ThemedText></Pressable>}
-                <Pressable style={styles.modalBtn} onPress={() => setAdding(false)}><ThemedText>Cancel</ThemedText></Pressable>
+                {addNewMember && <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleAddNewMember}><ThemedText style={{ color: '#fff', fontWeight: '700' }}>Save</ThemedText></Pressable>}
+                <Pressable style={styles.modalBtn} onPress={() => setAdding(false)}><ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText></Pressable>
               </View>
             </View>
+
           </View>
-        )}
+        </Modal>
+      )}
 
-        {showDobPicker && (
-          <Modal transparent animationType="fade" visible={showDobPicker} onRequestClose={() => setShowDobPicker(false)}>
-            <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-              <View style={[styles.modalContent, { backgroundColor: inputBg }]}> 
-                <ThemedText style={styles.modalTitle}>Select DOB</ThemedText>
-                <DateTimePicker
-                  value={tempDob || new Date()}
-                  mode="date"
-                  display="spinner"
-                  onChange={handleDobPickerChange}
-                  maximumDate={new Date()}
-                />
-                <View style={[styles.modalButtons, { marginTop: 16 }]}> 
-                  <Pressable style={styles.modalBtn} onPress={() => setShowDobPicker(false)}>
-                    <ThemedText>Cancel</ThemedText>
-                  </Pressable>
-                  <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleConfirmDob}>
-                    <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Confirm</ThemedText>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          </Modal>
-        )}
-
-        {editingIndex !== null && (
-          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+      {editingIndex !== null && (
+        <Modal transparent animationType="fade" visible={editingIndex !== null} onRequestClose={() => setEditingIndex(null)}>
+          <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
               <ThemedText style={styles.modalTitle}>Edit Relationship</ThemedText>
               <ThemedText style={styles.label}>Relation Type</ThemedText>
@@ -650,14 +690,49 @@ export default function MemberScreen() {
                 ))}
               </ScrollView>
               <View style={styles.modalButtons}>
-                <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleSaveEdit}><ThemedText style={{ color: '#fff' }}>Save</ThemedText></Pressable>
-                <Pressable style={styles.modalBtn} onPress={() => setEditingIndex(null)}><ThemedText>Cancel</ThemedText></Pressable>
+                <Pressable style={[styles.modalBtn, { backgroundColor: tint }]} onPress={handleSaveEdit}><ThemedText style={{ color: '#fff', fontWeight: '700' }}>Save</ThemedText></Pressable>
+                <Pressable style={styles.modalBtn} onPress={() => setEditingIndex(null)}><ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText></Pressable>
               </View>
             </View>
           </View>
-        )}
+        </Modal>
+      )}
 
-      </ScrollView>
+
+{showDobPicker && (
+        <Modal transparent animationType="fade" visible={showDobPicker} onRequestClose={() => setShowDobPicker(false)}>
+          <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.6)' }]}>
+            <View style={[styles.modalContent, { backgroundColor: inputBg }]}> 
+              <ThemedText style={styles.modalTitle}>Select DOB</ThemedText>
+              <View style={{ height: 200, overflow: 'hidden', width: '100%' }}>
+                <DateTimePicker
+                  value={tempDob || new Date()}
+                  mode="date"
+                  display="spinner"
+                  onChange={handleDobPickerChange}
+                  maximumDate={new Date()}
+                />
+              </View>
+              <View style={[styles.modalButtons, { marginTop: 20 }]}> 
+                <Pressable 
+                  style={[styles.modalBtn, { borderWidth: 1, borderColor: border, minWidth: 80 }]} 
+                  onPress={() => setShowDobPicker(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <ThemedText style={{ color: textColor, fontWeight: '700', textAlign: 'center' }}>Cancel</ThemedText>
+                </Pressable>
+                <Pressable 
+                  style={[styles.modalBtn, { backgroundColor: tint, minWidth: 80 }]} 
+                  onPress={handleConfirmDob}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <ThemedText style={{ color: '#fff', fontWeight: '700', textAlign: 'center' }}>Confirm</ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </ThemedView>
   );
 }
@@ -684,8 +759,8 @@ const styles = StyleSheet.create({
   relationActions: { flexDirection: 'row', gap: 8 },
   actionBtn: { padding: 4 },
   emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 20 },
-  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: 20, zIndex: 100 },
-  modalContent: { borderRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
+  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalContent: { width: '100%', maxWidth: 400, borderRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
   modalTitle: { fontSize: 20, fontWeight: '800', marginBottom: 20 },
   label: { fontSize: 14, fontWeight: '600', color: '#64748b', marginBottom: 8 },
   chipScroll: { flexDirection: 'row', marginBottom: 16 },

@@ -8,6 +8,7 @@ import { Member } from '@/types/Family';
 import { calculateTreeLayout } from '@/utils/treeLayout';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -15,7 +16,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Dimensions, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -38,6 +39,10 @@ export default function TreeScreen() {
   }>({ open: false, sourceId: null, type: null });
   const [useNewTarget, setUseNewTarget] = useState(true);
   const [newTargetName, setNewTargetName] = useState('');
+  const [newTargetSex, setNewTargetSex] = useState<'Male' | 'Female' | 'Other'>('Male');
+  const [newTargetDob, setNewTargetDob] = useState('');
+  const [showDobPicker, setShowDobPicker] = useState(false);
+  const [tempDob, setTempDob] = useState<Date>(new Date());
   const [targetId, setTargetId] = useState<string | null>(null);
 
   const [exportOpen, setExportOpen] = useState(false);
@@ -539,6 +544,8 @@ export default function TreeScreen() {
     setRelationModal({ open: true, sourceId, type });
     setUseNewTarget(true);
     setNewTargetName('');
+    setNewTargetSex('Male');
+    setNewTargetDob('');
     setTargetId(null);
   }, []);
 
@@ -554,7 +561,10 @@ export default function TreeScreen() {
     setRelationModal({ open: false, sourceId: null, type: null });
     setUseNewTarget(true);
     setNewTargetName('');
+    setNewTargetSex('Male');
+    setNewTargetDob('');
     setTargetId(null);
+    setShowDobPicker(false);
   }, []);
 
   const reciprocal = (type: string) => {
@@ -566,6 +576,43 @@ export default function TreeScreen() {
       case 'sibling': return type;
       default: return 'other';
     }
+  };
+
+  const handleOpenDobPicker = () => {
+    const base = newTargetDob ? new Date(newTargetDob) : new Date();
+    setTempDob(isNaN(base.getTime()) ? new Date() : base);
+    setShowDobPicker(true);
+  };
+
+  const onDobChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      if (event.type === 'set' && selectedDate) {
+        setTempDob(selectedDate);
+        const y = selectedDate.getFullYear();
+        const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+        const d = String(selectedDate.getDate()).padStart(2, '0');
+        setNewTargetDob(`${y}-${m}-${d}`);
+        setShowDobPicker(false);
+      } else if (event.type === 'dismissed') {
+        setShowDobPicker(false);
+      }
+    } else {
+      if (selectedDate) {
+        setTempDob(selectedDate);
+      }
+    }
+  };
+
+  const handleConfirmDob = () => {
+    if (!tempDob) {
+      setShowDobPicker(false);
+      return;
+    }
+    const y = tempDob.getFullYear();
+    const m = String(tempDob.getMonth() + 1).padStart(2, '0');
+    const d = String(tempDob.getDate()).padStart(2, '0');
+    setNewTargetDob(`${y}-${m}-${d}`);
+    setShowDobPicker(false);
   };
 
   const saveQuickRelation = useCallback(async () => {
@@ -600,7 +647,13 @@ export default function TreeScreen() {
         return;
       }
       finalTargetId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      list.push({ id: finalTargetId, name: newTargetName.trim(), relations: [] });
+      list.push({ 
+        id: finalTargetId, 
+        name: newTargetName.trim(), 
+        sex: newTargetSex,
+        dob: newTargetDob,
+        relations: [] 
+      });
     }
 
     if (!finalTargetId) {
@@ -843,133 +896,217 @@ export default function TreeScreen() {
       </View>
 
       {relationModal.open && (
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeRelationModal} />
-          <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
-            <ThemedText style={[styles.modalTitle, { color: textColor }]}>
-              Add {relationModal.type}
-            </ThemedText>
+        <Modal transparent animationType="fade" visible={relationModal.open} onRequestClose={closeRelationModal}>
+          <View style={styles.overlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeRelationModal} />
+            <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>
+                Add {relationModal.type}
+              </ThemedText>
 
-            <View style={[styles.toggleContainer, { borderColor: borderColor }]}
-            >
-              <Pressable
-                style={[styles.toggle, !useNewTarget && { backgroundColor: tint }]}
-                onPress={() => setUseNewTarget(false)}
+              <View style={[styles.toggleContainer, { borderColor: borderColor }]}
               >
-                <ThemedText style={[styles.toggleText, !useNewTarget && { color: '#fff' }]}>
-                  Existing
-                </ThemedText>
-              </Pressable>
-              <Pressable
-                style={[styles.toggle, useNewTarget && { backgroundColor: tint }]}
-                onPress={() => setUseNewTarget(true)}
-              >
-                <ThemedText style={[styles.toggleText, useNewTarget && { color: '#fff' }]}>
-                  New
-                </ThemedText>
-              </Pressable>
-            </View>
+                <Pressable
+                  style={[styles.toggle, !useNewTarget && { backgroundColor: tint }]}
+                  onPress={() => setUseNewTarget(false)}
+                >
+                  <ThemedText style={[styles.toggleText, !useNewTarget && { color: '#fff' }]}>
+                    Existing
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  style={[styles.toggle, useNewTarget && { backgroundColor: tint }]}
+                  onPress={() => setUseNewTarget(true)}
+                >
+                  <ThemedText style={[styles.toggleText, useNewTarget && { color: '#fff' }]}>
+                    New
+                  </ThemedText>
+                </Pressable>
+              </View>
 
-            {useNewTarget ? (
-              <TextInput
-                placeholder="Name"
-                placeholderTextColor="#94a3b8"
-                value={newTargetName}
-                onChangeText={setNewTargetName}
-                style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
-              />
-            ) : (
-              <ScrollView style={styles.memberList}>
-                {members
-                  .filter((m) => m.id !== relationModal.sourceId)
-                  .map((m) => (
-                    <Pressable
-                      key={m.id}
-                      onPress={() => setTargetId(m.id)}
-                      style={[
-                        styles.memberRow,
-                        { borderColor: borderColor },
-                        targetId === m.id && { backgroundColor: tint + '10', borderColor: tint },
-                      ]}
-                    >
-                      <ThemedText style={{ color: textColor, fontWeight: '600' }}>{m.name}</ThemedText>
-                      {targetId === m.id && (
-                        <ThemedText style={{ color: tint, fontWeight: '800' }}>✓</ThemedText>
-                      )}
+              {useNewTarget ? (
+                <View>
+                  <TextInput
+                    placeholder="Name"
+                    placeholderTextColor="#94a3b8"
+                    value={newTargetName}
+                    onChangeText={setNewTargetName}
+                    style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
+                  />
+
+                  <ThemedText style={[styles.label, { color: textColor }]}>Sex</ThemedText>
+                  <View style={styles.sexRow}>
+                    {['Male', 'Female', 'Other'].map((opt) => (
+                      <Pressable
+                        key={opt}
+                        style={[
+                          styles.sexChip,
+                          { borderColor: borderColor },
+                          newTargetSex === opt && { backgroundColor: tint, borderColor: tint }
+                        ]}
+                        onPress={() => setNewTargetSex(opt as any)}
+                      >
+                        <ThemedText style={[styles.sexChipText, newTargetSex === opt && { color: '#fff' }]}>
+                          {opt}
+                        </ThemedText>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  <ThemedText style={[styles.label, { color: textColor }]}>Date of Birth</ThemedText>
+                  {Platform.OS === 'web' ? (
+                    <TextInput
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor="#94a3b8"
+                      value={newTargetDob}
+                      onChangeText={setNewTargetDob}
+                      style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
+                    />
+                  ) : (
+                    <Pressable onPress={handleOpenDobPicker}>
+                      <TextInput
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor="#94a3b8"
+                        value={newTargetDob}
+                        editable={false}
+                        style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor, pointerEvents: 'none' }]}
+                      />
                     </Pressable>
-                  ))}
-              </ScrollView>
-            )}
+                  )}
+                </View>
+              ) : (
+                <ScrollView style={styles.memberList}>
+                  {members
+                    .filter((m) => m.id !== relationModal.sourceId)
+                    .map((m) => (
+                      <Pressable
+                        key={m.id}
+                        onPress={() => setTargetId(m.id)}
+                        style={[
+                          styles.memberRow,
+                          { borderColor: borderColor },
+                          targetId === m.id && { backgroundColor: tint + '10', borderColor: tint },
+                        ]}
+                      >
+                        <ThemedText style={{ color: textColor, fontWeight: '600' }}>{m.name}</ThemedText>
+                        {targetId === m.id && (
+                          <ThemedText style={{ color: tint, fontWeight: '800' }}>✓</ThemedText>
+                        )}
+                      </Pressable>
+                    ))}
+                </ScrollView>
+              )}
 
-            <View style={styles.modalButtons}>
-              <Pressable onPress={closeRelationModal} style={[styles.modalBtn, { borderColor: borderColor }]}>
-                <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
-              </Pressable>
-              <Pressable onPress={saveQuickRelation} style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}>
-                <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Save</ThemedText>
-              </Pressable>
+              <View style={styles.modalButtons}>
+                <Pressable onPress={closeRelationModal} style={[styles.modalBtn, { borderColor: borderColor }]}>
+                  <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
+                </Pressable>
+                <Pressable onPress={saveQuickRelation} style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}>
+                  <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Save</ThemedText>
+                </Pressable>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
+      )}
+
+      {showDobPicker && (
+        <Modal transparent animationType="fade" visible={showDobPicker} onRequestClose={() => setShowDobPicker(false)}>
+          <View style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.6)' }]}>
+            <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Select DOB</ThemedText>
+              <View style={{ height: 200, overflow: 'hidden' }}>
+                <DateTimePicker
+                  value={tempDob}
+                  mode="date"
+                  display="spinner"
+                  onChange={onDobChange}
+                  maximumDate={new Date()}
+                />
+              </View>
+              <View style={[styles.modalButtons, { marginTop: 20 }]}>
+                <Pressable 
+                  onPress={() => setShowDobPicker(false)} 
+                  style={[styles.modalBtn, { borderColor: borderColor, borderWidth: 1, minWidth: 80 }]}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <ThemedText style={{ color: textColor, fontWeight: '700', textAlign: 'center' }}>Cancel</ThemedText>
+                </Pressable>
+                <Pressable 
+                  onPress={handleConfirmDob} 
+                  style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint, borderWidth: 1, minWidth: 80 }]}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <ThemedText style={{ color: '#fff', fontWeight: '700', textAlign: 'center' }}>Confirm</ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
       )}
 
       {exportOpen && (
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeExport} />
-          <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
-            <ThemedText style={[styles.modalTitle, { color: textColor }]}>Export JSON</ThemedText>
-            <ThemedText style={{ color: textColor, opacity: 0.8, marginBottom: 10 }}>
-              Copy this JSON and keep it safe.
-            </ThemedText>
-            <ScrollView style={{ maxHeight: 280, marginBottom: 12 }}>
-              <TextInput
-                value={exportText}
-                editable={false}
-                multiline
-                style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
-              />
-            </ScrollView>
-            <View style={styles.modalButtons}>
-              <Pressable onPress={closeExport} style={[styles.modalBtn, { borderColor: borderColor }]}>
-                <ThemedText style={{ color: textColor, fontWeight: '700' }}>Close</ThemedText>
-              </Pressable>
+        <Modal transparent animationType="fade" visible={exportOpen} onRequestClose={closeExport}>
+          <View style={styles.overlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeExport} />
+            <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Export JSON</ThemedText>
+              <ThemedText style={{ color: textColor, opacity: 0.8, marginBottom: 10 }}>
+                Copy this JSON and keep it safe.
+              </ThemedText>
+              <ScrollView style={{ maxHeight: 280, marginBottom: 12 }}>
+                <TextInput
+                  value={exportText}
+                  editable={false}
+                  multiline
+                  style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
+                />
+              </ScrollView>
+              <View style={styles.modalButtons}>
+                <Pressable onPress={closeExport} style={[styles.modalBtn, { borderColor: borderColor }]}>
+                  <ThemedText style={{ color: textColor, fontWeight: '700' }}>Close</ThemedText>
+                </Pressable>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
 
       {importOpen && (
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeImport} />
-          <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
-            <ThemedText style={[styles.modalTitle, { color: textColor }]}>Import JSON</ThemedText>
-            <ThemedText style={{ color: textColor, opacity: 0.8, marginBottom: 10 }}>
-              Paste a previously exported JSON here.
-            </ThemedText>
-            <ScrollView style={{ maxHeight: 280, marginBottom: 12 }}>
-              <TextInput
-                value={importText}
-                onChangeText={setImportText}
-                multiline
-                placeholder="Paste JSON..."
-                placeholderTextColor="#94a3b8"
-                style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
-              />
-            </ScrollView>
-            <View style={styles.modalButtons}>
-              <Pressable onPress={closeImport} style={[styles.modalBtn, { borderColor: borderColor }]}>
-                <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
-              </Pressable>
-              <Pressable
-                onPress={handleImport}
-                style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}
-              >
-                <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Import</ThemedText>
-              </Pressable>
+        <Modal transparent animationType="fade" visible={importOpen} onRequestClose={closeImport}>
+          <View style={styles.overlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeImport} />
+            <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Import JSON</ThemedText>
+              <ThemedText style={{ color: textColor, opacity: 0.8, marginBottom: 10 }}>
+                Paste a previously exported JSON here.
+              </ThemedText>
+              <ScrollView style={{ maxHeight: 280, marginBottom: 12 }}>
+                <TextInput
+                  value={importText}
+                  onChangeText={setImportText}
+                  multiline
+                  placeholder="Paste JSON..."
+                  placeholderTextColor="#94a3b8"
+                  style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
+                />
+              </ScrollView>
+              <View style={styles.modalButtons}>
+                <Pressable onPress={closeImport} style={[styles.modalBtn, { borderColor: borderColor }]}>
+                  <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={handleImport}
+                  style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}
+                >
+                  <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Import</ThemedText>
+                </Pressable>
+              </View>
             </View>
           </View>
-        </View>
+        </Modal>
       )}
+
     </ThemedView>
   );
 }
@@ -1121,6 +1258,30 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     marginBottom: 12,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+    opacity: 0.7,
+  },
+  sexRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  sexChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    borderColor: '#e2e8f0',
+  },
+  sexChipText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#64748b',
   },
   memberList: {
     maxHeight: 220,
