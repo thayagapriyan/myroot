@@ -1,7 +1,8 @@
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { FamilyService } from '@/services/familyService';
+import { Member } from '@/types/Family';
 import { Stack, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
@@ -18,19 +19,15 @@ export default function AddMemberScreen() {
 
   const handleSave = async () => {
     if (!name.trim()) return Alert.alert('Name required');
-    const userKey = await AsyncStorage.getItem('currentUser');
-    if (!userKey) return router.replace('/login');
-    const familyKey = `${userKey}:family`;
-    const raw = await AsyncStorage.getItem(familyKey);
-    const members = raw ? JSON.parse(raw) : [];
-    const newMember = { 
+    const members = await FamilyService.getFamily();
+    const newMember: Member = { 
       id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`, 
       name: name.trim(), 
       dob: dob.trim(), 
       relations: [] 
     };
     members.push(newMember);
-    await AsyncStorage.setItem(familyKey, JSON.stringify(members));
+    await FamilyService.saveFamily(members);
     router.back();
   };
 

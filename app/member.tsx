@@ -4,9 +4,8 @@ import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
 import { Member } from '@/types/Family';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -53,6 +52,9 @@ export default function MemberScreen() {
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [pickerSource, setPickerSource] = useState<'profile' | 'adding'>('profile');
   const [tempDob, setTempDob] = useState<Date | null>(null);
+  const [isPinned, setIsPinned] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
 
   const inputBg = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
@@ -72,14 +74,17 @@ export default function MemberScreen() {
 
   useEffect(() => {
     (async () => {
-      const userKey = await AsyncStorage.getItem('currentUser');
-      if (!userKey) return router.replace('/login');
-      const list = await FamilyService.getFamily(userKey);
+      const list = await FamilyService.getFamily();
       setMembers(list);
       const found = list.find((m) => m.id === id);
       setMember(found || null);
+      if (found) {
+        setEditedName(found.name);
+        const pinnedId = await FamilyService.getPinnedMemberId();
+        setIsPinned(pinnedId === found.id);
+      }
     })();
-  }, [id, router]);
+  }, [id]);
 
   useEffect(() => {
     if (member) {
@@ -94,12 +99,28 @@ export default function MemberScreen() {
   }, [member]);
 
   const saveMembers = async (list: Member[]) => {
-    const userKey = await AsyncStorage.getItem('currentUser');
-    if (!userKey) return router.replace('/login');
-    await FamilyService.saveFamily(userKey, list);
+    await FamilyService.saveFamily(list);
     setMembers(list);
     const found = list.find((m) => m.id === id);
     setMember(found || null);
+  };
+
+  const handleTogglePin = async () => {
+    if (!member) return;
+    const newPinnedState = !isPinned;
+    await FamilyService.setPinnedMemberId(newPinnedState ? member.id : null);
+    setIsPinned(newPinnedState);
+  };
+
+  const handleSaveName = async () => {
+    if (!member || !editedName.trim()) return;
+    const list = [...members];
+    const idx = list.findIndex((m) => m.id === member.id);
+    if (idx === -1) return;
+
+    list[idx] = { ...list[idx], name: editedName.trim() };
+    await saveMembers(list);
+    setIsEditingName(false);
   };
 
   const handlePickProfilePhoto = async () => {
@@ -115,7 +136,7 @@ export default function MemberScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: 'images',
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.85,
@@ -128,7 +149,7 @@ export default function MemberScreen() {
       // On native, copy the image to a permanent location
       if (Platform.OS !== 'web') {
         try {
-          const photosDir = `${FileSystem.documentDirectory}photos/`;
+          const photosDir = `${(FileSystem as any).documentDirectory}photos/`;
           await FileSystem.makeDirectoryAsync(photosDir, { intermediates: true }).catch(() => {});
           const filename = `${member.id}_${Date.now()}.jpg`;
           const dest = `${photosDir}${filename}`;
@@ -145,18 +166,6 @@ export default function MemberScreen() {
         list[idx] = { ...list[idx], photo: uri };
       }
 
-      // If this member is the current user's profile, also store the photo in the user record.
-      const currentKey = await AsyncStorage.getItem('currentUser');
-      if (currentKey) {
-        const userRaw = await AsyncStorage.getItem(currentKey);
-        const user = userRaw ? JSON.parse(userRaw) : null;
-        const isMe = !!user && ((user.email && member.email && user.email === member.email) || (user.name && user.name === member.name));
-        if (isMe) {
-          const nextUser = { ...user, photo: uri };
-          await AsyncStorage.setItem(currentKey, JSON.stringify(nextUser));
-        }
-      }
-
       await saveMembers(list);
     } catch {
       Alert.alert('Error', 'Could not pick an image.');
@@ -168,12 +177,6 @@ export default function MemberScreen() {
     const m = `${d.getMonth() + 1}`.padStart(2, '0');
     const day = `${d.getDate()}`.padStart(2, '0');
     return `${y}-${m}-${day}`;
-  };
-
-  const commitDobValue = (date: Date) => {
-    const next = formatDate(date);
-    setDobInput(next);
-    setTempDob(date);
   };
 
   const handleOpenDobPicker = (source: 'profile' | 'adding' = 'profile') => {
@@ -236,18 +239,6 @@ export default function MemberScreen() {
       dob: cleanDob || undefined,
       age,
     };
-
-    // If this member is the logged-in user, sync minimal fields back to the user record.
-    const currentKey = await AsyncStorage.getItem('currentUser');
-    if (currentKey) {
-      const userRaw = await AsyncStorage.getItem(currentKey);
-      const user = userRaw ? JSON.parse(userRaw) : null;
-      const isMe = !!user && ((user.email && member.email && user.email === member.email) || (user.name && user.name === member.name));
-      if (isMe) {
-        const nextUser = { ...user, dob: cleanDob || undefined, sex: cleanSex || undefined, age };
-        await AsyncStorage.setItem(currentKey, JSON.stringify(nextUser));
-      }
-    }
 
     await saveMembers(list);
     Alert.alert('Saved', 'Profile updated');
@@ -488,7 +479,41 @@ export default function MemberScreen() {
               <ThemedText style={{ color: tint, fontSize: 40, fontWeight: '800' }}>{member.name.charAt(0)}</ThemedText>
             )}
           </Pressable>
-          <ThemedText style={styles.profileName}>{member.name}</ThemedText>
+          
+          <View style={{ alignItems: 'center', width: '100%', paddingHorizontal: 20 }}>
+            {isEditingName ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TextInput
+                  value={editedName}
+                  onChangeText={setEditedName}
+                  autoFocus
+                  style={[styles.nameInput, { color: textColor, borderBottomColor: tint }]}
+                  onSubmitEditing={handleSaveName}
+                />
+                <Pressable onPress={handleSaveName}>
+                  <Ionicons name="checkmark-circle" size={24} color={tint} />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ThemedText style={styles.profileName}>{member.name}</ThemedText>
+                <Pressable onPress={() => setIsEditingName(true)}>
+                  <Ionicons name="pencil" size={16} color={textColor} style={{ opacity: 0.5 }} />
+                </Pressable>
+              </View>
+            )}
+          </View>
+
+          <Pressable 
+            onPress={handleTogglePin}
+            style={[styles.pinToggle, { backgroundColor: isPinned ? tint : tint + '15', borderColor: isPinned ? tint : border }]}
+          >
+            <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
+            <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
+              {isPinned ? 'Pinned as Default' : 'Pin as Default'}
+            </ThemedText>
+          </Pressable>
+
           {member.dob && <ThemedText style={styles.profileDob}>Born: {member.dob}</ThemedText>}
         </View>
 
@@ -744,6 +769,9 @@ const styles = StyleSheet.create({
   avatarLarge: { width: 120, height: 120, borderRadius: 60, borderWidth: 4, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginBottom: 16 },
   avatarImg: { width: '100%', height: '100%' },
   profileName: { fontSize: 24, fontWeight: '800' },
+  nameInput: { fontSize: 24, fontWeight: '800', borderBottomWidth: 2, paddingVertical: 0, minWidth: 150, textAlign: 'center' },
+  pinToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, marginTop: 12, marginBottom: 4 },
+  pinToggleText: { fontSize: 12, fontWeight: '700' },
   profileDob: { fontSize: 14, color: '#64748b', marginTop: 4 },
   section: { marginBottom: 24 },
   infoCard: { borderWidth: 1, borderRadius: 16, padding: 16 },

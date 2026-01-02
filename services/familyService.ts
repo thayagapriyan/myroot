@@ -1,25 +1,33 @@
 import { Member } from '@/types/Family';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const FAMILY_SUFFIX = ':family';
+const FAMILY_KEY = 'local:family';
+const PINNED_MEMBER_KEY = 'local:pinned_member';
 
 export const FamilyService = {
-  async getFamily(userKey: string): Promise<Member[]> {
-    if (!userKey) return [];
-    const familyKey = `${userKey}${FAMILY_SUFFIX}`;
-    const raw = await AsyncStorage.getItem(familyKey);
+  async getFamily(): Promise<Member[]> {
+    const raw = await AsyncStorage.getItem(FAMILY_KEY);
     return raw ? JSON.parse(raw) : [];
   },
 
-  async saveFamily(userKey: string, members: Member[]): Promise<void> {
-    if (!userKey) return;
-    const familyKey = `${userKey}${FAMILY_SUFFIX}`;
-    await AsyncStorage.setItem(familyKey, JSON.stringify(members));
+  async saveFamily(members: Member[]): Promise<void> {
+    await AsyncStorage.setItem(FAMILY_KEY, JSON.stringify(members));
   },
 
-  async resetFamily(userKey: string): Promise<void> {
-    if (!userKey) return;
-    const familyKey = `${userKey}${FAMILY_SUFFIX}`;
-    await AsyncStorage.removeItem(familyKey);
+  async resetFamily(): Promise<void> {
+    await AsyncStorage.removeItem(FAMILY_KEY);
+    await AsyncStorage.removeItem(PINNED_MEMBER_KEY);
+  },
+
+  async getPinnedMemberId(): Promise<string | null> {
+    return await AsyncStorage.getItem(PINNED_MEMBER_KEY);
+  },
+
+  async setPinnedMemberId(id: string | null): Promise<void> {
+    if (id) {
+      await AsyncStorage.setItem(PINNED_MEMBER_KEY, id);
+    } else {
+      await AsyncStorage.removeItem(PINNED_MEMBER_KEY);
+    }
   }
 };

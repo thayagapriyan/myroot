@@ -47,47 +47,20 @@ export default function AddRelationScreen() {
 
   useEffect(() => {
     (async () => {
-      const key = await AsyncStorage.getItem('currentUser');
-      if (!key) return router.replace('/login');
-      
-      const list = await FamilyService.getFamily(key);
-      
-      // Ensure current user is in the list
-      const userRaw = await AsyncStorage.getItem(key);
-      const user = userRaw ? JSON.parse(userRaw) : null;
-      let srcId: string | null = null;
-      
-      if (user) {
-        const found = list.find((m) => (m.email && user.email && m.email === user.email) || (m.name && m.name === user.name));
-        if (found) srcId = found.id;
-        else {
-          const newId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-          const me: Member = { 
-            id: newId, 
-            name: user.name || 'Me', 
-            dob: user.dob || undefined, 
-            relations: [] 
-          };
-          list.push(me);
-          await FamilyService.saveFamily(key, list);
-          srcId = newId;
-        }
-      }
-      
+      const list = await FamilyService.getFamily();
       setMembers(list);
+      
+      const activeId = await AsyncStorage.getItem('activeUserId');
       if (params.sourceId) setSourceId(params.sourceId);
-      else if (srcId) setSourceId(srcId);
+      else if (activeId) setSourceId(activeId);
       else if (list.length > 0) setSourceId(list[0].id);
     })();
-  }, [params.sourceId, router]);
+  }, [params.sourceId]);
 
   const handleSave = async () => {
     if (!sourceId) return Alert.alert('Select source member');
     const type = selectedType === 'other' ? customLabel || 'other' : selectedType;
     if (!type) return Alert.alert('Select relation type');
-
-    const key = await AsyncStorage.getItem('currentUser');
-    if (!key) return router.replace('/login');
 
     const list = [...members];
     
@@ -141,7 +114,7 @@ export default function AddRelationScreen() {
       });
     }
 
-    await FamilyService.saveFamily(key, list);
+    await FamilyService.saveFamily(list);
     setMembers(list);
     router.replace('/tree');
   };

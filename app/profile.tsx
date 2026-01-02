@@ -11,37 +11,17 @@ export default function ProfileScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const currentKey = await AsyncStorage.getItem('currentUser');
-        if (!currentKey) {
-          router.replace('/login');
-          return;
-        }
-        
-        // Find my ID in the family list
-        const familyKey = `${currentKey}:family`;
-        const rawFamily = await AsyncStorage.getItem(familyKey);
-        const family = rawFamily ? JSON.parse(rawFamily) : [];
-        
-        const userRaw = await AsyncStorage.getItem(currentKey);
-        const user = userRaw ? JSON.parse(userRaw) : {};
-        
-        // Try to find by email or name
-        const me = family.find((m: any) => 
-          (user.email && m.email === user.email) || 
-          (user.name && m.name === user.name)
-        );
-        
-        if (me) {
-          router.replace(`/member?id=${me.id}`);
+        const activeUserId = await AsyncStorage.getItem('activeUserId');
+        if (activeUserId) {
+          router.replace(`/member?id=${activeUserId}`);
         } else {
-          // If not found, go to tree which usually initializes the user
           router.replace('/tree');
         }
-      } catch (e) {
-        router.replace('/login');
+      } catch {
+        router.replace('/tree');
       }
     })();
-  }, []);
+  }, [router]);
 
   return (
     <ThemedView style={styles.container}>

@@ -16,7 +16,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Animated, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -26,11 +26,17 @@ export default function TreeScreen() {
   const [members, setMembers] = useState<Member[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [activeMemberId, setActiveMemberId] = useState<string | null>(null);
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const [activeUserId, setActiveUserId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearchResults, setShowSearchResults] = useState(false);
   const bgColor = useThemeColor({}, 'background');
   const cardColor = useThemeColor({}, 'card');
   const borderColor = useThemeColor({}, 'border');
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
+
+  const activeUser = useMemo(() => members.find(m => m.id === activeUserId), [members, activeUserId]);
 
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
@@ -45,58 +51,122 @@ export default function TreeScreen() {
   const [tempDob, setTempDob] = useState<Date>(new Date());
   const [targetId, setTargetId] = useState<string | null>(null);
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pinnedMemberId, setPinnedMemberId] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportText, setExportText] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [currentZoom, setCurrentZoom] = useState(1);
-  const [containerDims, setContainerDims] = useState({ width: SCREEN_W, height: SCREEN_H - 180 });
+  const [containerDims, setContainerDims] = useState({ width: SCREEN_W, height: SCREEN_H - 240 });
+  const [toast, setToast] = useState<string | null>(null);
+  const toastsRef = useRef<string[]>([]);
+  const toastActiveRef = useRef(false);
+  const backdropAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(backdropAnim, {
+      toValue: expandedNodeId ? 1 : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [expandedNodeId, backdropAnim]);
+
+  const enqueueToast = useCallback((msg: string) => {
+    if (!toastActiveRef.current) {
+      toastActiveRef.current = true;
+      setToast(msg);
+      setTimeout(() => {
+        setToast(null);
+        const processNext = () => {
+          const next = toastsRef.current.shift();
+          if (next) {
+            setToast(next);
+            setTimeout(() => {
+              setToast(null);
+              processNext();
+            }, 1800);
+          } else {
+            toastActiveRef.current = false;
+          }
+        };
+        processNext();
+      }, 1800);
+    } else {
+      toastsRef.current.push(msg);
+    }
+  }, []);
 
   const zoomPanContainerRef = useRef<any>(null);
-
-  const ensureDefaultMember = useCallback(async (userKey: string, list: Member[]) => {
-    if (list.length > 0) return list;
-
-    let name = 'Me';
-    let dob: string | undefined;
-    let email: string | undefined;
-    let photo: string | undefined;
-
-    try {
-      const userRaw = await AsyncStorage.getItem(userKey);
-      const user = userRaw ? JSON.parse(userRaw) : null;
-      if (user?.name) name = user.name;
-      if (user?.dob) dob = user.dob;
-      if (user?.email) email = user.email;
-      if (user?.photo) photo = user.photo;
-    } catch {
-      // ignore and fallback to defaults
+  const autoHideMs = 3000;
+  const expandTimerRef = useRef<number | null>(null);
+  const clearExpandTimer = () => {
+    if (expandTimerRef.current) {
+      clearTimeout(expandTimerRef.current as any);
+      expandTimerRef.current = null;
     }
+  };
+
+  useEffect(() => {
+    clearExpandTimer();
+    if (expandedNodeId) {
+      expandTimerRef.current = setTimeout(() => {
+        setExpandedNodeId(null);
+        expandTimerRef.current = null;
+      }, autoHideMs) as unknown as number;
+    }
+    return () => clearExpandTimer();
+  }, [expandedNodeId]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpandedNodeId(null);
+    };
+    if (expandedNodeId) window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [expandedNodeId]);
+
+  const ensureDefaultMember = useCallback(async (list: Member[]) => {
+    if (list.length > 0) return list;
 
     const me: Member = {
       id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-      name,
-      email,
-      dob,
-      photo,
+      name: 'Me',
       relations: [],
     };
 
     const next = [me];
-    await FamilyService.saveFamily(userKey, next);
+    await FamilyService.saveFamily(next);
     return next;
   }, []);
 
   const loadMembers = useCallback(async () => {
-    const userKey = await AsyncStorage.getItem('currentUser');
-    if (!userKey) return router.replace('/login');
-
-    const list = await FamilyService.getFamily(userKey);
-    const ensured = await ensureDefaultMember(userKey, list);
+    const list = await FamilyService.getFamily();
+    const ensured = await ensureDefaultMember(list);
     setMembers(ensured);
+    
+    const pinnedId = await FamilyService.getPinnedMemberId();
+    setPinnedMemberId(pinnedId);
+    
+    const savedActiveId = await AsyncStorage.getItem('activeUserId');
+    if (savedActiveId && ensured.some(m => m.id === savedActiveId)) {
+      setActiveUserId(savedActiveId);
+    } else if (ensured.length > 0) {
+      setActiveUserId(ensured[0].id);
+      await AsyncStorage.setItem('activeUserId', ensured[0].id);
+    }
+
     setActiveMemberId(null);
     if (ensured.length <= 1) setIsEditing(false);
-  }, [ensureDefaultMember, router]);
+  }, [ensureDefaultMember]);
+
+  const filteredMembers = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    return members.filter(m => 
+      m.name.toLowerCase().includes(searchQuery.toLowerCase())
+    ).slice(0, 5);
+  }, [members, searchQuery]);
 
   const normalizeImportedFamily = useCallback((data: unknown): Member[] | null => {
     const rawList: any[] = Array.isArray(data)
@@ -179,7 +249,7 @@ export default function TreeScreen() {
 
       const base64Zip = await zip.generateAsync({ type: 'base64' });
 
-      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      const baseDir = FileSystem.cacheDirectory || (FileSystem as any).documentDirectory;
       if (!baseDir) {
         openExportModal();
         return;
@@ -267,9 +337,6 @@ export default function TreeScreen() {
 
   const importFromJsonText = useCallback(
     async (text: string) => {
-      const userKey = await AsyncStorage.getItem('currentUser');
-      if (!userKey) return router.replace('/login');
-
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -284,20 +351,17 @@ export default function TreeScreen() {
         return;
       }
 
-      const ensured = await ensureDefaultMember(userKey, next);
-      await FamilyService.saveFamily(userKey, ensured);
+      const ensured = await ensureDefaultMember(next);
+      await FamilyService.saveFamily(ensured);
       setMembers(ensured);
       setIsEditing(false);
       setActiveMemberId(null);
       Alert.alert('Imported', 'Family tree imported successfully.');
     },
-    [ensureDefaultMember, normalizeImportedFamily, router]
+    [ensureDefaultMember, normalizeImportedFamily]
   );
 
   const importFromZip = useCallback(async (uri: string) => {
-    const userKey = await AsyncStorage.getItem('currentUser');
-    if (!userKey) return router.replace('/login');
-
     try {
       let zipData: any;
       if (Platform.OS === 'web') {
@@ -357,8 +421,8 @@ export default function TreeScreen() {
         }
       }
 
-      const ensured = await ensureDefaultMember(userKey, updatedMembers);
-      await FamilyService.saveFamily(userKey, ensured);
+      const ensured = await ensureDefaultMember(updatedMembers);
+      await FamilyService.saveFamily(ensured);
       setMembers(ensured);
       setIsEditing(false);
       setActiveMemberId(null);
@@ -367,7 +431,7 @@ export default function TreeScreen() {
       console.error('Import failed:', error);
       Alert.alert('Import failed', 'Could not process the ZIP file.');
     }
-  }, [ensureDefaultMember, normalizeImportedFamily, router]);
+  }, [ensureDefaultMember, normalizeImportedFamily]);
 
   const openImportModal = useCallback(() => {
     setImportText('');
@@ -394,7 +458,7 @@ export default function TreeScreen() {
       try {
         const text = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
         await importFromJsonText(text);
-      } catch (err) {
+      } catch {
         Alert.alert('Import failed', 'Could not read the selected file.');
       }
     }
@@ -451,12 +515,10 @@ export default function TreeScreen() {
 
   const handleReset = async () => {
     const performReset = async () => {
-      const key = await AsyncStorage.getItem('currentUser');
-      if (!key) return;
-      await FamilyService.resetFamily(key);
+      await FamilyService.resetFamily();
       setIsEditing(false);
       setActiveMemberId(null);
-      const ensured = await ensureDefaultMember(key, []);
+      const ensured = await ensureDefaultMember([]);
       setMembers(ensured);
       Alert.alert('Success', 'All family data has been cleared.');
     };
@@ -474,7 +536,7 @@ export default function TreeScreen() {
     ]);
   };
 
-  const { layers, positions, edges, spouseEdges } = useMemo(() => {
+  const { positions, edges, spouseEdges } = useMemo(() => {
     try {
       return calculateTreeLayout(members, SCREEN_W);
     } catch (err) {
@@ -517,15 +579,23 @@ export default function TreeScreen() {
 
   const handleResetZoomPan = useCallback(() => {
     const rootMember = members[0];
-    if (rootMember && centeredPositions[rootMember.id]) {
+    const fitZoomW = containerDims.width / contentWidth;
+    const fitZoomH = containerDims.height / contentHeight;
+    const fitZoom = Math.max(0.05, Math.min(1, fitZoomW, fitZoomH) * 0.9);
+
+    // If we are already zoomed out (less than 0.4), focus back on root at 0.8x
+    if (currentZoom < 0.4 && rootMember && centeredPositions[rootMember.id]) {
       const pos = centeredPositions[rootMember.id];
-      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.5);
-      setCurrentZoom(0.5);
+      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.8);
+      setCurrentZoom(0.8);
     } else {
-      zoomPanContainerRef.current?.reset?.();
-      setCurrentZoom(1);
+      // Otherwise fit the whole tree
+      const centerX = contentWidth / 2;
+      const centerY = contentHeight / 2;
+      zoomPanContainerRef.current?.focusOn?.(centerX, centerY, fitZoom);
+      setCurrentZoom(fitZoom);
     }
-  }, [members, centeredPositions]);
+  }, [members, centeredPositions, containerDims, contentWidth, contentHeight, currentZoom]);
 
   const edgeColors = useMemo(() => {
     const palette = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
@@ -565,6 +635,7 @@ export default function TreeScreen() {
     setNewTargetDob('');
     setTargetId(null);
     setShowDobPicker(false);
+    setExpandedNodeId(null);
   }, []);
 
   const reciprocal = (type: string) => {
@@ -618,12 +689,14 @@ export default function TreeScreen() {
   const saveQuickRelation = useCallback(async () => {
     if (!relationModal.open || !relationModal.sourceId || !relationModal.type) return;
 
-    const userKey = await AsyncStorage.getItem('currentUser');
-    if (!userKey) return router.replace('/login');
-
     const sourceId = relationModal.sourceId;
     const type = relationModal.type;
     const list: Member[] = [...members];
+
+    // Haptic on save (mobile)
+    try { 
+      if (Platform.OS !== 'web') await (await import('expo-haptics')).notificationAsync((await import('expo-haptics')).NotificationFeedbackType.Success);
+    } catch {}
 
     const addRelationPair = (id1: string, id2: string, type1to2: string) => {
       const m1 = list.find(m => m.id === id1);
@@ -678,10 +751,13 @@ export default function TreeScreen() {
       childrenRels.forEach((c) => addRelationPair(finalTargetId!, c.targetId, 'child'));
     }
 
-    await FamilyService.saveFamily(userKey, list);
+    await FamilyService.saveFamily(list);
     setMembers(list);
     closeRelationModal();
-  }, [closeRelationModal, members, newTargetName, relationModal, router, targetId, useNewTarget]);
+
+    // show toast (queued)
+    enqueueToast('Relation saved');
+  }, [closeRelationModal, members, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast]);
 
   const handleDeleteMember = useCallback(
     async (id: string) => {
@@ -691,9 +767,6 @@ export default function TreeScreen() {
       }
 
       const performDelete = async () => {
-        const userKey = await AsyncStorage.getItem('currentUser');
-        if (!userKey) return router.replace('/login');
-
         const memberToDelete = members.find(m => m.id === id);
         if (memberToDelete?.photo && memberToDelete.photo.startsWith('file://')) {
           try {
@@ -710,7 +783,7 @@ export default function TreeScreen() {
             relations: (m.relations || []).filter((r) => r.targetId !== id),
           }));
 
-        await FamilyService.saveFamily(userKey, next);
+        await FamilyService.saveFamily(next);
         setMembers(next);
         setActiveMemberId((prev) => (prev === id ? null : prev));
       };
@@ -727,7 +800,7 @@ export default function TreeScreen() {
         { text: 'Delete', style: 'destructive', onPress: () => void performDelete() },
       ]);
     },
-    [members, router]
+    [members]
   );
 
   return (
@@ -736,63 +809,77 @@ export default function TreeScreen() {
         options={{ 
           headerShown: true,
           title: 'Family Tree',
-          headerLeft: () => null,
-          headerRight: () => (
+          headerTitleAlign: 'center',
+          headerLeft: () => (
             <Pressable
-              onPress={() => router.push('/profile')}
-              style={[styles.iconBtn, { backgroundColor: tint, borderColor: tint, marginRight: 12 }]}
-              accessibilityLabel="Profile"
+              onPress={() => setSettingsOpen(true)}
+              style={[styles.iconBtn, { marginLeft: 12, backgroundColor: cardColor, borderColor: borderColor }]}
+              accessibilityLabel="Menu"
             >
-              <Ionicons name="person-circle-outline" size={22} color="#fff" />
+              <Ionicons name="menu-outline" size={24} color={textColor} />
             </Pressable>
+          ),
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 12 }}>
+              <Pressable
+                onPress={() => activeUserId && router.push(`/member?id=${activeUserId}`)}
+                style={[styles.profileBtn, { borderColor: tint }]}
+                accessibilityLabel="Profile"
+              >
+                {activeUser?.photo ? (
+                  <Image source={{ uri: activeUser.photo }} style={styles.profileImg} />
+                ) : (
+                  <View style={[styles.profilePlaceholder, { backgroundColor: tint }]}>
+                    <ThemedText style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>
+                      {activeUser?.name?.charAt(0).toUpperCase() || '?'}
+                    </ThemedText>
+                  </View>
+                )}
+              </Pressable>
+            </View>
           ),
         }} 
       />
 
-      <View style={[styles.inlineControls, { borderBottomColor: borderColor, backgroundColor: bgColor }]}>
-        <View style={styles.inlineLeft}>
-          <Pressable
-            disabled={members.length <= 1}
-            onPress={() => setIsEditing((v) => !v)}
-            style={[styles.topBtnPrimary, { backgroundColor: cardColor, borderColor: borderColor }, members.length <= 1 && { opacity: 0.45 }]}
-          >
-            <Ionicons name={isEditing ? "checkmark" : "pencil"} size={14} color={tint} />
-            <ThemedText style={[styles.topBtnPrimaryText, { color: tint }]}>{isEditing ? 'Done' : 'Edit'}</ThemedText>
-          </Pressable>
-          <Pressable
-            onPress={handleReset}
-            style={[styles.topBtnDanger, { backgroundColor: cardColor, borderColor: borderColor }]}
-          >
-            <Ionicons name="refresh-outline" size={14} color="#FF3B30" />
-            <ThemedText style={styles.topBtnDangerText}>Reset</ThemedText>
-          </Pressable>
+      {showSearchResults && (
+        <View style={[styles.searchContainer, { backgroundColor: bgColor, borderBottomColor: borderColor }]}>
+          <View style={[styles.searchBar, { backgroundColor: cardColor, borderColor: borderColor }]}>
+            <Ionicons name="search-outline" size={20} color={textColor} style={{ marginLeft: 12 }} />
+            <TextInput
+              autoFocus
+              placeholder="Search family members..."
+              placeholderTextColor="#94a3b8"
+              value={searchQuery}
+              onChangeText={(text) => {
+                setSearchQuery(text);
+              }}
+              style={[styles.searchInput, { color: textColor }]}
+            />
+            <Pressable onPress={() => { setSearchQuery(''); setShowSearchResults(false); }}>
+              <Ionicons name="close-circle" size={20} color="#94a3b8" style={{ marginRight: 12 }} />
+            </Pressable>
+          </View>
+          
+          {searchQuery.length > 0 && filteredMembers.length > 0 && (
+            <View style={[styles.searchResults, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              {filteredMembers.map((m) => (
+                <Pressable 
+                  key={m.id} 
+                  style={[styles.searchResultItem, { borderBottomColor: borderColor }]}
+                  onPress={() => {
+                    setShowSearchResults(false);
+                    setSearchQuery('');
+                    router.push(`/member?id=${m.id}`);
+                  }}
+                >
+                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>{m.name}</ThemedText>
+                  <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+                </Pressable>
+              ))}
+            </View>
+          )}
         </View>
-        <View style={styles.inlineRight}>
-          <Pressable
-            onPress={handleResetZoomPan}
-            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
-          >
-            <Ionicons name="search-outline" size={14} color={textColor} />
-            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>
-              {currentZoom.toFixed(1)}x
-            </ThemedText>
-          </Pressable>
-          <Pressable
-            onPress={handleExportPress}
-            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
-          >
-            <Ionicons name="share-outline" size={14} color={textColor} />
-            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>Export</ThemedText>
-          </Pressable>
-          <Pressable
-            onPress={handleImportPress}
-            style={[styles.topBtnSecondary, { backgroundColor: cardColor, borderColor: borderColor }]}
-          >
-            <Ionicons name="download-outline" size={14} color={textColor} />
-            <ThemedText style={[styles.topBtnSecondaryText, { color: textColor }]}>Import</ThemedText>
-          </Pressable>
-        </View>
-      </View>
+      )}
 
       <View 
         style={{ flex: 1 }} 
@@ -809,13 +896,32 @@ export default function TreeScreen() {
           contentHeight={contentHeight}
           containerWidth={containerDims.width}
           containerHeight={containerDims.height}
-          minZoom={0.5}
+          minZoom={0.05}
           maxZoom={3}
           onZoomChange={setCurrentZoom}
-          initialFocusX={members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].x + 70 : undefined}
-          initialFocusY={members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].y + 40 : undefined}
+          initialFocusX={
+            pinnedMemberId && centeredPositions[pinnedMemberId] 
+              ? centeredPositions[pinnedMemberId].x + 70 
+              : (members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].x + 70 : undefined)
+          }
+          initialFocusY={
+            pinnedMemberId && centeredPositions[pinnedMemberId] 
+              ? centeredPositions[pinnedMemberId].y + 40 
+              : (members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].y + 40 : undefined)
+          }
         >
-          <View style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }}>
+          <Pressable style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }} onPress={() => setExpandedNodeId(null)}>
+            <Animated.View 
+              pointerEvents={expandedNodeId ? 'auto' : 'none'}
+              style={[
+                StyleSheet.absoluteFill, 
+                { 
+                  backgroundColor: 'rgba(0,0,0,0.4)', 
+                  zIndex: 500,
+                  opacity: backdropAnim 
+                }
+              ]} 
+            />
             <Svg style={StyleSheet.absoluteFill} width={contentWidth} height={contentHeight}>
               {/* Spouse Edges */}
               {spouseEdges.map((e, i) => {
@@ -884,15 +990,28 @@ export default function TreeScreen() {
                   position={pos}
                   color={color}
                   isEditing={isEditing}
-                  showActions={isEditing || activeMemberId === id}
+                  isPinned={pinnedMemberId === id}
+                  expanded={expandedNodeId === id}
+                  showActions={isEditing || activeMemberId === id || expandedNodeId === id}
                   onPress={(id) => handleSelectMember(id)}
-                  onAddRelation={(id, type) => openRelationModal(id, type as any)}
+                  onLongPress={(id) => { setExpandedNodeId(id); setActiveMemberId(id); }}
+                  onAddRelation={(id, type) => { setExpandedNodeId(null); openRelationModal(id, type as any); }}
                   onRemove={handleDeleteMember}
                 />
               );
             })}
-          </View>
+          </Pressable>
         </ZoomPanContainer>
+
+        {isEditing && (
+          <Pressable
+            onPress={() => setIsEditing(false)}
+            style={[styles.doneBtn, { backgroundColor: tint }]}
+          >
+            <Ionicons name="checkmark" size={20} color="#fff" />
+            <ThemedText style={styles.doneBtnText}>Done</ThemedText>
+          </Pressable>
+        )}
       </View>
 
       {relationModal.open && (
@@ -1072,6 +1191,13 @@ export default function TreeScreen() {
         </Modal>
       )}
 
+      {/* Toast */}
+      {toast && (
+        <View style={[styles.toast, { backgroundColor: '#111827' }]}>
+          <ThemedText style={{ color: '#fff', fontWeight: '700' }}>{toast}</ThemedText>
+        </View>
+      )}
+
       {importOpen && (
         <Modal transparent animationType="fade" visible={importOpen} onRequestClose={closeImport}>
           <View style={styles.overlay}>
@@ -1086,7 +1212,7 @@ export default function TreeScreen() {
                   value={importText}
                   onChangeText={setImportText}
                   multiline
-                  placeholder="Paste JSON..."
+                  placeholder="Paste JSON here..."
                   placeholderTextColor="#94a3b8"
                   style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
                 />
@@ -1095,14 +1221,107 @@ export default function TreeScreen() {
                 <Pressable onPress={closeImport} style={[styles.modalBtn, { borderColor: borderColor }]}>
                   <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
                 </Pressable>
-                <Pressable
-                  onPress={handleImport}
-                  style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}
-                >
+                <Pressable onPress={handleImport} style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}>
                   <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Import</ThemedText>
                 </Pressable>
               </View>
             </View>
+          </View>
+        </Modal>
+      )}
+
+      {settingsOpen && (
+        <Modal transparent animationType="none" visible={settingsOpen} onRequestClose={() => setSettingsOpen(false)}>
+          <View style={styles.drawerOverlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setSettingsOpen(false)} />
+            <Animated.View style={[styles.drawerContent, { backgroundColor: cardColor, borderColor: borderColor }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, paddingHorizontal: 4 }}>
+                <ThemedText style={[styles.modalTitle, { color: textColor, marginBottom: 0 }]}>Menu</ThemedText>
+                <Pressable onPress={() => setSettingsOpen(false)}>
+                  <Ionicons name="close" size={24} color={textColor} />
+                </Pressable>
+              </View>
+
+              <View style={{ gap: 12 }}>
+                <Pressable
+                  onPress={() => { setShowSearchResults(true); setSettingsOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: tint + '15' }]}>
+                      <Ionicons name="search-outline" size={20} color={tint} />
+                    </View>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Search Members</ThemedText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
+
+                <View style={{ height: 1, backgroundColor: borderColor, marginVertical: 8, opacity: 0.5 }} />
+
+                {!isEditing && (
+                  <Pressable
+                    onPress={() => { setIsEditing(true); setSettingsOpen(false); }}
+                    style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={[styles.settingsIcon, { backgroundColor: tint + '15' }]}>
+                        <Ionicons name="pencil-outline" size={20} color={tint} />
+                      </View>
+                      <ThemedText style={{ color: textColor, fontWeight: '600' }}>Edit Tree</ThemedText>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                  </Pressable>
+                )}
+
+                <Pressable
+                  onPress={() => { handleExportPress(); setSettingsOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: '#3b82f615' }]}>
+                      <Ionicons name="share-outline" size={20} color="#3b82f6" />
+                    </View>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Export Family Data</ThemedText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
+
+                <Pressable
+                  onPress={() => { handleImportPress(); setSettingsOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: '#10b98115' }]}>
+                      <Ionicons name="download-outline" size={20} color="#10b981" />
+                    </View>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Import Family Data</ThemedText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
+
+                <View style={{ height: 1, backgroundColor: borderColor, marginVertical: 8, opacity: 0.5 }} />
+
+                <Pressable
+                  onPress={() => { handleReset(); setSettingsOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
+                      <Ionicons name="refresh-outline" size={20} color="#ef4444" />
+                    </View>
+                    <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Reset All Data</ThemedText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
+              </View>
+
+              <View style={{ marginTop: 'auto', paddingBottom: 20, alignItems: 'center' }}>
+                <ThemedText style={{ fontSize: 12, color: '#94a3b8' }}>Zoom Level: {currentZoom.toFixed(1)}x</ThemedText>
+                <Pressable onPress={handleResetZoomPan} style={{ marginTop: 8 }}>
+                  <ThemedText style={{ color: tint, fontWeight: '700', fontSize: 13 }}>Reset View</ThemedText>
+                </Pressable>
+              </View>
+            </Animated.View>
           </View>
         </Modal>
       )}
@@ -1131,87 +1350,124 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  inlineControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  searchContainer: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    gap: 8,
-    zIndex: 10,
+    borderBottomWidth: 1,
+    zIndex: 20,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  searchInput: {
+    flex: 1,
+    paddingHorizontal: 10,
+    fontSize: 14,
+  },
+  profileBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileImg: {
+    width: '100%',
+    height: '100%',
+  },
+  profilePlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doneBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 100,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  doneBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  settingsItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  settingsIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchResults: {
+    position: 'absolute',
+    top: 48,
+    left: 12,
+    right: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    zIndex: 100,
+    ...Platform.select({
+      web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.1)' },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.1,
+        shadowOffset: { width: 0, height: 4 },
+        shadowRadius: 8,
+        elevation: 5,
+      }
+    }),
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
     borderBottomWidth: 1,
   },
   inlineLeft: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  inlineRight: { flexDirection: 'row', gap: 6, alignItems: 'center', marginLeft: 'auto' },
-  topBtnPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    gap: 4,
-    ...Platform.select({
-      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.05,
-        shadowOffset: { width: 0, height: 1 },
-        shadowRadius: 2,
-        elevation: 1,
-      }
-    }),
+  drawerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    backgroundColor: 'rgba(0,0,0,0.4)',
   },
-  topBtnPrimaryText: {
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  topBtnDanger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    gap: 4,
-    ...Platform.select({
-      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.05,
-        shadowOffset: { width: 0, height: 1 },
-        shadowRadius: 2,
-        elevation: 1,
-      }
-    }),
-  },
-  topBtnDangerText: {
-    color: '#FF3B30',
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  topBtnSecondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    gap: 4,
-    ...Platform.select({
-      web: { boxShadow: '0px 1px 2px rgba(0,0,0,0.05)' },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.05,
-        shadowOffset: { width: 0, height: 1 },
-        shadowRadius: 2,
-        elevation: 1,
-      }
-    }),
-  },
-  topBtnSecondaryText: {
-    fontWeight: '700',
-    fontSize: 11,
+  drawerContent: {
+    width: '80%',
+    maxWidth: 300,
+    height: '100%',
+    padding: 20,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    borderRightWidth: 1,
+    elevation: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 0 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1318,4 +1574,5 @@ const styles = StyleSheet.create({
     minHeight: 200,
     textAlignVertical: 'top',
   },
+  toast: { position: 'absolute', left: 16, right: 16, bottom: 20, alignItems: 'center', paddingVertical: 12, borderRadius: 12, zIndex: 200, elevation: 10 },
 });
