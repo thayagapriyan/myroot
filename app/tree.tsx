@@ -469,18 +469,6 @@ export default function TreeScreen() {
     ]);
   };
 
-  const handleResetZoomPan = useCallback(() => {
-    const rootMember = members[0];
-    if (rootMember && centeredPositions[rootMember.id]) {
-      const pos = centeredPositions[rootMember.id];
-      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.5);
-      setCurrentZoom(0.5);
-    } else {
-      zoomPanContainerRef.current?.reset?.();
-      setCurrentZoom(1);
-    }
-  }, [members, centeredPositions]);
-
   const { layers, positions, edges, spouseEdges } = useMemo(() => {
     return calculateTreeLayout(members, SCREEN_W);
   }, [members]);
@@ -514,6 +502,18 @@ export default function TreeScreen() {
     });
     return { centeredPositions: shifted, contentWidth: width, contentHeight: height };
   }, [positions]);
+
+  const handleResetZoomPan = useCallback(() => {
+    const rootMember = members[0];
+    if (rootMember && centeredPositions[rootMember.id]) {
+      const pos = centeredPositions[rootMember.id];
+      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.5);
+      setCurrentZoom(0.5);
+    } else {
+      zoomPanContainerRef.current?.reset?.();
+      setCurrentZoom(1);
+    }
+  }, [members, centeredPositions]);
 
   const edgeColors = useMemo(() => {
     const palette = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
