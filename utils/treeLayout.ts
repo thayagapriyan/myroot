@@ -154,8 +154,8 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
   // Position nodes
   const positions: Record<string, { x: number; y: number }> = {};
   const levelHeight = 220;
-  const unitGap = 260;
-  const memberGap = 190;
+  const unitGap = 120; // Balanced gap between subtrees
+  const memberGap = 160;
   const minLeft = 40;
   const nodeWidth = 140;
   const nodeHeight = 100;
@@ -245,10 +245,11 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
   const unitLayers: string[][] = [];
   allUnits.forEach((u) => {
     const d = unitDepth.get(u) ?? 0;
-    if (!unitLayers[d]) unitLayers[d] = [];
+    while (unitLayers.length <= d) unitLayers.push([]);
     unitLayers[d].push(u);
   });
   unitLayers.forEach((layer, depth) => {
+    if (!layer || layer.length === 0) return;
     layer.sort((a, b) => {
       const aa = getAnchorId(a);
       const bb = getAnchorId(b);
@@ -260,23 +261,38 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
 
   const unitCount = (u: string) => Math.max(1, compMembers.get(u)?.length ?? 1);
   const unitWidth = (u: string) => nodeWidth + (unitCount(u) - 1) * memberGap;
-  // Unit X coordinate is the left-x of the unit; width accounts for spouses/partners so children center under the whole union.
-  const unitBounds = (u: string, anchorLeftX: number) => {
-    const width = unitWidth(u);
-    const left = anchorLeftX;
-    const right = anchorLeftX + width;
-    return { left, right };
-  };
-  const unitMidX = (u: string) => {
-    const x = unitX.get(u) ?? 0;
-    return x + unitWidth(u) / 2;
+
+  // Recursive subtree width calculation to reserve enough space for all descendants
+  const subtreeWidthCache = new Map<string, number>();
+  const getSubtreeWidth = (u: string): number => {
+    if (subtreeWidthCache.has(u)) return subtreeWidthCache.get(u)!;
+    
+    const ownWidth = unitWidth(u);
+    // Only consider children that are at a strictly greater depth to avoid infinite recursion in case of cycles
+    const childrenUnits = Array.from(childUnitsOf.get(u) || [])
+      .filter(cu => (unitDepth.get(cu) ?? 0) > (unitDepth.get(u) ?? 0));
+    
+    if (childrenUnits.length === 0) {
+      subtreeWidthCache.set(u, ownWidth);
+      return ownWidth;
+    }
+
+    // Sum of children's subtree widths plus gaps
+    const childrenTotalWidth = childrenUnits.reduce((sum, cu, i) => {
+      return sum + getSubtreeWidth(cu) + (i < childrenUnits.length - 1 ? unitGap : 0);
+    }, 0);
+
+    const finalWidth = Math.max(ownWidth, childrenTotalWidth);
+    subtreeWidthCache.set(u, finalWidth);
+    return finalWidth;
   };
 
+  // Unit X coordinate is the left-x of the unit
   const unitX = new Map<string, number>();
   const unitOrderIndex = new Map<string, number>();
   unitLayers.forEach((layer) => layer?.forEach((u, idx) => unitOrderIndex.set(u, idx)));
 
-  // Place units top-down: center children under the midpoint of their parents (joint parents supported).
+  // Place units top-down: center children under the midpoint of their parents
   for (let depth = 0; depth < unitLayers.length; depth++) {
     const layer = unitLayers[depth] || [];
     if (!layer.length) continue;
@@ -297,41 +313,51 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
       if (parentKey) {
         const parentUnits = parentKey.split(':');
         const xs = parentUnits
-          .map(p => unitMidX(p))
+          .map(p => (unitX.get(p) ?? 0) + unitWidth(p) / 2)
           .filter(x => typeof x === 'number');
         if (xs.length) {
           groupCenter = xs.reduce((a, b) => a + b, 0) / xs.length;
         } else {
-          groupCenter = layer.indexOf(siblings[0]) * unitGap;
+          groupCenter = layer.indexOf(siblings[0]) * (unitGap * 2);
         }
       } else {
-        groupCenter = layer.indexOf(siblings[0]) * unitGap;
+        groupCenter = layer.indexOf(siblings[0]) * (unitGap * 2);
       }
 
-      // Calculate total width of this sibling group
-      const totalGroupWidth = siblings.reduce((sum, u, i) => {
-        return sum + unitWidth(u) + (i < siblings.length - 1 ? unitGap : 0);
+      // Calculate total width of this sibling group based on SUBTREE widths
+      const totalGroupSubtreeWidth = siblings.reduce((sum, u, i) => {
+        return sum + getSubtreeWidth(u) + (i < siblings.length - 1 ? unitGap : 0);
       }, 0);
 
       // Start position for the first sibling in the group to center the whole group
-      let currentX = groupCenter - totalGroupWidth / 2;
+      let currentSubtreeLeft = groupCenter - totalGroupSubtreeWidth / 2;
       siblings.forEach(u => {
-        targetX.set(u, currentX);
-        currentX += unitWidth(u) + unitGap;
+        const sWidth = getSubtreeWidth(u);
+        const uWidth = unitWidth(u);
+        // Center the unit itself within its reserved subtree space
+        const unitLeft = currentSubtreeLeft + (sWidth - uWidth) / 2;
+        targetX.set(u, unitLeft);
+        currentSubtreeLeft += sWidth + unitGap;
       });
     });
 
     // Sort by target position
     layer.sort((a, b) => (targetX.get(a) ?? 0) - (targetX.get(b) ?? 0));
 
-    // Collision resolution: spread out from the center if possible, but for now keep simple shift
-    let prevRight = -Infinity;
+    // Collision resolution: ensure subtrees don't overlap
+    let prevSubtreeRight = -Infinity;
     layer.forEach((u) => {
-      const desiredLeft = targetX.get(u) ?? 0;
-      const minAllowedLeft = prevRight === -Infinity ? desiredLeft : prevRight + 60; // small gap between units
-      const finalLeft = Math.max(desiredLeft, minAllowedLeft);
-      unitX.set(u, finalLeft);
-      prevRight = finalLeft + unitWidth(u);
+      const uWidth = unitWidth(u);
+      const sWidth = getSubtreeWidth(u);
+      const desiredUnitLeft = targetX.get(u) ?? 0;
+      const desiredSubtreeLeft = desiredUnitLeft - (sWidth - uWidth) / 2;
+      
+      const minAllowedSubtreeLeft = prevSubtreeRight === -Infinity ? desiredSubtreeLeft : prevSubtreeRight + unitGap;
+      const finalSubtreeLeft = Math.max(desiredSubtreeLeft, minAllowedSubtreeLeft);
+      
+      const finalUnitLeft = finalSubtreeLeft + (sWidth - uWidth) / 2;
+      unitX.set(u, finalUnitLeft);
+      prevSubtreeRight = finalSubtreeLeft + sWidth;
     });
   }
 
@@ -341,25 +367,28 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
     layer.forEach(u => {
       const childrenUnits = Array.from(childUnitsOf.get(u) || []);
       if (childrenUnits.length > 0) {
-        const childXs = childrenUnits.map(cu => unitX.get(cu) ?? 0 + unitWidth(cu) / 2);
+        const childXs = childrenUnits.map(cu => (unitX.get(cu) ?? 0) + unitWidth(cu) / 2);
         const childrenCenter = childXs.reduce((a, b) => a + b, 0) / childXs.length;
         const desiredLeft = childrenCenter - unitWidth(u) / 2;
-        
-        // Only move if it doesn't cause immediate collision with left neighbor
-        // This is a simple heuristic; a full collision resolution would be better
         unitX.set(u, desiredLeft);
       }
     });
     
-    // Re-resolve collisions for this layer after moving parents
-    let prevRight = -Infinity;
+    // Re-resolve collisions for this layer after moving parents, respecting SUBTREE widths
+    let prevSubtreeRight = -Infinity;
     layer.sort((a, b) => (unitX.get(a) ?? 0) - (unitX.get(b) ?? 0));
     layer.forEach(u => {
-      const currentLeft = unitX.get(u) ?? 0;
-      const minAllowedLeft = prevRight === -Infinity ? currentLeft : prevRight + 60;
-      const finalLeft = Math.max(currentLeft, minAllowedLeft);
-      unitX.set(u, finalLeft);
-      prevRight = finalLeft + unitWidth(u);
+      const uWidth = unitWidth(u);
+      const sWidth = getSubtreeWidth(u);
+      const currentUnitLeft = unitX.get(u) ?? 0;
+      const currentSubtreeLeft = currentUnitLeft - (sWidth - uWidth) / 2;
+      
+      const minAllowedSubtreeLeft = prevSubtreeRight === -Infinity ? currentSubtreeLeft : prevSubtreeRight + unitGap;
+      const finalSubtreeLeft = Math.max(currentSubtreeLeft, minAllowedSubtreeLeft);
+      
+      const finalUnitLeft = finalSubtreeLeft + (sWidth - uWidth) / 2;
+      unitX.set(u, finalUnitLeft);
+      prevSubtreeRight = finalSubtreeLeft + sWidth;
     });
   }
 
@@ -402,7 +431,7 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
   const allPos = Object.values(positions);
   if (allPos.length) {
     const minX = Math.min(...allPos.map((p) => p.x));
-    if (minX < minLeft) {
+    if (isFinite(minX) && minX < minLeft) {
       const dx = minLeft - minX;
       Object.keys(positions).forEach((id) => {
         positions[id] = { x: positions[id].x + dx, y: positions[id].y };

@@ -470,7 +470,12 @@ export default function TreeScreen() {
   };
 
   const { layers, positions, edges, spouseEdges } = useMemo(() => {
-    return calculateTreeLayout(members, SCREEN_W);
+    try {
+      return calculateTreeLayout(members, SCREEN_W);
+    } catch (err) {
+      console.error('Layout calculation failed:', err);
+      return { layers: [], positions: {}, edges: [], spouseEdges: [] };
+    }
   }, [members]);
 
   const { centeredPositions, contentWidth, contentHeight } = useMemo(() => {
@@ -485,16 +490,18 @@ export default function TreeScreen() {
     const maxX = Math.max(...pts.map((p) => p.x));
     const minY = Math.min(...pts.map((p) => p.y));
     const maxY = Math.max(...pts.map((p) => p.y));
-    const layoutWidth = maxX - minX + nodeW;
-    const layoutHeight = maxY - minY + nodeH;
+    
+    const layoutWidth = isFinite(maxX - minX) ? maxX - minX + nodeW : SCREEN_W;
+    const layoutHeight = isFinite(maxY - minY) ? maxY - minY + nodeH : 800;
     
     // Content size should be exactly the layout size plus small padding
-    const width = layoutWidth + pad * 2;
-    const height = Math.max(800, layoutHeight + pad);
+    // Cap at 20000 to prevent crash on extreme trees
+    const width = Math.min(20000, layoutWidth + pad * 2);
+    const height = Math.min(20000, Math.max(800, layoutHeight + pad));
     
     // Offset to center the layout within the contentWidth
-    const offsetX = pad - minX;
-    const offsetY = 60 - minY; // align to top with some padding
+    const offsetX = isFinite(minX) ? pad - minX : pad;
+    const offsetY = isFinite(minY) ? 60 - minY : 60; // align to top with some padding
     
     const shifted: typeof positions = {};
     Object.entries(positions).forEach(([id, p]) => {
