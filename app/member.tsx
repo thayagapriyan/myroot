@@ -6,6 +6,7 @@ import { Member } from '@/types/Family';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -118,8 +119,22 @@ export default function MemberScreen() {
       });
 
       if (result.canceled) return;
-      const uri = result.assets?.[0]?.uri;
+      let uri = result.assets?.[0]?.uri;
       if (!uri) return;
+
+      // On native, copy the image to a permanent location
+      if (Platform.OS !== 'web') {
+        try {
+          const photosDir = `${FileSystem.documentDirectory}photos/`;
+          await FileSystem.makeDirectoryAsync(photosDir, { intermediates: true }).catch(() => {});
+          const filename = `${member.id}_${Date.now()}.jpg`;
+          const dest = `${photosDir}${filename}`;
+          await FileSystem.copyAsync({ from: uri, to: dest });
+          uri = dest;
+        } catch (err) {
+          console.error('Failed to copy photo:', err);
+        }
+      }
 
       const list = [...members];
       const idx = list.findIndex((m) => m.id === member.id);
