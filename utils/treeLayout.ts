@@ -1,4 +1,4 @@
-import { Member, TreeLayout } from '@/types/family';
+import { Member, TreeLayout } from '@/types/Family';
 
 export function calculateTreeLayout(members: Member[], screenWidth: number): TreeLayout {
   const map = new Map<string, Member>();

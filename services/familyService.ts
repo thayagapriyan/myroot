@@ -1,4 +1,4 @@
-import { Member } from '@/types/family';
+import { Member } from '@/types/Family';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const FAMILY_SUFFIX = ':family';

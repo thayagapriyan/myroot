@@ -1,6 +1,6 @@
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { useThemeColor } from '@/hooks/useThemeColor';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, useRouter } from 'expo-router';
 import React, { useState } from 'react';
@@ -27,7 +27,7 @@ export default function SignupScreen() {
       await AsyncStorage.setItem(key, JSON.stringify(user));
       await AsyncStorage.setItem('currentUser', key);
       Alert.alert('Success', 'Account created successfully');
-      router.replace('/(tabs)');
+      router.replace('/tree');
     } catch (err) {
       Alert.alert('Error', 'Failed to create account');
     }

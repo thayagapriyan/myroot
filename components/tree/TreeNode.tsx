@@ -1,6 +1,6 @@
-import { ThemedText } from '@/components/themed-text';
-import { Member } from '@/types/family';
-import React from 'react';
+import { ThemedText } from '@/components/ThemedText';
+import { Member } from '@/types/Family';
+import React, { memo } from 'react';
 import { Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 interface TreeNodeProps {
@@ -14,7 +14,7 @@ interface TreeNodeProps {
   onRemove: (id: string) => void;
 }
 
-export function TreeNode({ member, position, color, isEditing = false, showActions = false, onPress, onAddRelation, onRemove }: TreeNodeProps) {
+export const TreeNode = memo(({ member, position, color, isEditing = false, showActions = false, onPress, onAddRelation, onRemove }: TreeNodeProps) => {
   return (
     <View style={[styles.node, { left: position.x, top: position.y }]}>
       <Pressable 
@@ -85,7 +85,7 @@ export function TreeNode({ member, position, color, isEditing = false, showActio
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   node: {
