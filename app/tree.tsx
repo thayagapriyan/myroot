@@ -1,3 +1,4 @@
+import { SideTray } from '@/components/SideTray';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { TreeNode } from '@/components/tree/TreeNode';
@@ -33,6 +34,9 @@ export default function TreeScreen() {
   const [pinnedMemberId, setPinnedMemberId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearchResults, setShowSearchResults] = useState(false);
+  const [leftTrayOpen, setLeftTrayOpen] = useState(false);
+  const [rightTrayOpen, setRightTrayOpen] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const bgColor = useThemeColor({}, 'background');
   const cardColor = useThemeColor({}, 'card');
   const borderColor = useThemeColor({}, 'border');
@@ -43,6 +47,10 @@ export default function TreeScreen() {
     const id = pinnedMemberId || activeUserId;
     return members.find(m => m.id === id) || members.find(m => m.id === activeUserId);
   }, [members, activeUserId, pinnedMemberId]);
+
+  const selectedMember = useMemo(() => {
+    return members.find(m => m.id === selectedMemberId);
+  }, [members, selectedMemberId]);
 
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
@@ -57,7 +65,6 @@ export default function TreeScreen() {
   const [tempDob, setTempDob] = useState<Date>(new Date());
   const [targetId, setTargetId] = useState<string | null>(null);
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportText, setExportText] = useState('');
   const [importOpen, setImportOpen] = useState(false);
@@ -634,12 +641,10 @@ export default function TreeScreen() {
   }, []);
 
   const handleSelectMember = useCallback((id: string) => {
-    if (activeMemberIdRef.current === id) {
-      router.push(`/member?id=${id}`);
-      return;
-    }
+    setSelectedMemberId(id);
+    setRightTrayOpen(true);
     setActiveMemberId(id);
-  }, [router]);
+  }, []);
 
   const closeRelationModal = useCallback(() => {
     setRelationModal({ open: false, sourceId: null, type: null });
@@ -676,7 +681,7 @@ export default function TreeScreen() {
         const y = selectedDate.getFullYear();
         const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
         const d = String(selectedDate.getDate()).padStart(2, '0');
-        setNewTargetDob(`${y}-${m}-${d}`);
+        setNewTargetDob(`${m}/${d}/${y}`);
         setShowDobPicker(false);
       } else if (event.type === 'dismissed') {
         setShowDobPicker(false);
@@ -693,11 +698,24 @@ export default function TreeScreen() {
       setShowDobPicker(false);
       return;
     }
-    const y = tempDob.getFullYear();
     const m = String(tempDob.getMonth() + 1).padStart(2, '0');
     const d = String(tempDob.getDate()).padStart(2, '0');
-    setNewTargetDob(`${y}-${m}-${d}`);
+    const y = tempDob.getFullYear();
+    setNewTargetDob(`${m}/${d}/${y}`);
     setShowDobPicker(false);
+  };
+
+  const handleDateInputChange = (text: string, setter: (val: string) => void) => {
+    let cleaned = text.replace(/\D/g, '');
+    cleaned = cleaned.substring(0, 8);
+    let formatted = cleaned;
+    if (cleaned.length > 2) {
+      formatted = cleaned.substring(0, 2) + '/' + cleaned.substring(2);
+    }
+    if (cleaned.length > 4) {
+      formatted = formatted.substring(0, 5) + '/' + formatted.substring(5);
+    }
+    setter(formatted);
   };
 
   const saveQuickRelation = useCallback(async () => {
@@ -826,7 +844,7 @@ export default function TreeScreen() {
           headerTitleAlign: 'center',
           headerLeft: () => (
             <Pressable
-              onPress={() => setSettingsOpen(true)}
+              onPress={() => setLeftTrayOpen(prev => !prev)}
               style={[styles.iconBtn, { marginLeft: 12, backgroundColor: cardColor, borderColor: borderColor }]}
               accessibilityLabel="Menu"
             >
@@ -1087,25 +1105,22 @@ export default function TreeScreen() {
                   </View>
 
                   <ThemedText style={[styles.label, { color: textColor }]}>Date of Birth</ThemedText>
-                  {Platform.OS === 'web' ? (
+                  <View style={[styles.dateInputContainer, { borderColor: borderColor }]}>
                     <TextInput
-                      placeholder="YYYY-MM-DD"
+                      placeholder="MM/DD/YYYY"
                       placeholderTextColor="#94a3b8"
                       value={newTargetDob}
-                      onChangeText={setNewTargetDob}
-                      style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor }]}
+                      onChangeText={(t) => handleDateInputChange(t, setNewTargetDob)}
+                      keyboardType="number-pad"
+                      style={[styles.dateInput, { color: textColor }]}
                     />
-                  ) : (
-                    <Pressable onPress={handleOpenDobPicker}>
-                      <TextInput
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor="#94a3b8"
-                        value={newTargetDob}
-                        editable={false}
-                        style={[styles.input, { backgroundColor: bgColor, borderColor: borderColor, color: textColor, pointerEvents: 'none' }]}
-                      />
+                    <Pressable 
+                      onPress={handleOpenDobPicker}
+                      style={styles.calendarIcon}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={tint} />
                     </Pressable>
-                  )}
+                  </View>
                 </View>
               ) : (
                 <ScrollView style={styles.memberList}>
@@ -1280,22 +1295,21 @@ export default function TreeScreen() {
         </Modal>
       )}
 
-      {settingsOpen && (
-        <Modal transparent animationType="none" visible={settingsOpen} onRequestClose={() => setSettingsOpen(false)}>
-          <View style={styles.drawerOverlay}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setSettingsOpen(false)} />
-            <Animated.View style={[styles.drawerContent, { backgroundColor: cardColor, borderColor: borderColor, paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, paddingHorizontal: 4 }}>
-                <ThemedText style={[styles.modalTitle, { color: textColor, marginBottom: 0 }]}>Menu</ThemedText>
-                <Pressable onPress={() => setSettingsOpen(false)}>
-                  <Ionicons name="close" size={24} color={textColor} />
-                </Pressable>
-              </View>
-
-              <View style={{ gap: 12 }}>
+      <SideTray
+        isOpen={leftTrayOpen}
+        onClose={() => setLeftTrayOpen(false)}
+        side="left"
+        title="Menu"
+      >
+        <ScrollView style={{ padding: 16 }}>
+          <View style={{ gap: 24 }}>
+            {/* Navigation Category */}
+            <View>
+              <ThemedText style={styles.categoryTitle}>Navigation</ThemedText>
+              <View style={{ gap: 8 }}>
                 <Pressable
-                  onPress={() => { setShowSearchResults(true); setSettingsOpen(false); }}
-                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                  onPress={() => { setShowSearchResults(true); setLeftTrayOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                     <View style={[styles.settingsIcon, { backgroundColor: tint + '15' }]}>
@@ -1306,12 +1320,10 @@ export default function TreeScreen() {
                   <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
 
-                <View style={{ height: 1, backgroundColor: borderColor, marginVertical: 8, opacity: 0.5 }} />
-
                 {!isEditing && (
                   <Pressable
-                    onPress={() => { setIsEditing(true); setSettingsOpen(false); }}
-                    style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                    onPress={() => { setIsEditing(true); setLeftTrayOpen(false); }}
+                    style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                       <View style={[styles.settingsIcon, { backgroundColor: tint + '15' }]}>
@@ -1322,10 +1334,16 @@ export default function TreeScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                   </Pressable>
                 )}
+              </View>
+            </View>
 
+            {/* Data Management Category */}
+            <View>
+              <ThemedText style={styles.categoryTitle}>Data Management</ThemedText>
+              <View style={{ gap: 8 }}>
                 <Pressable
-                  onPress={() => { handleExportPress(); setSettingsOpen(false); }}
-                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                  onPress={() => { handleExportPress(); setLeftTrayOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                     <View style={[styles.settingsIcon, { backgroundColor: '#3b82f615' }]}>
@@ -1337,8 +1355,8 @@ export default function TreeScreen() {
                 </Pressable>
 
                 <Pressable
-                  onPress={() => { handleImportPress(); setSettingsOpen(false); }}
-                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
+                  onPress={() => { handleImportPress(); setLeftTrayOpen(false); }}
+                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                     <View style={[styles.settingsIcon, { backgroundColor: '#10b98115' }]}>
@@ -1348,33 +1366,114 @@ export default function TreeScreen() {
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
+              </View>
+            </View>
 
-                <View style={{ height: 1, backgroundColor: borderColor, marginVertical: 8, opacity: 0.5 }} />
-
-                <Pressable
-                  onPress={() => { handleReset(); setSettingsOpen(false); }}
-                  style={[styles.settingsItem, { backgroundColor: bgColor, borderColor: borderColor }]}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
-                      <Ionicons name="refresh-outline" size={20} color="#ef4444" />
-                    </View>
-                    <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Reset All Data</ThemedText>
+            {/* Danger Zone Category */}
+            <View>
+              <ThemedText style={styles.categoryTitle}>Danger Zone</ThemedText>
+              <Pressable
+                onPress={() => { handleReset(); setLeftTrayOpen(false); }}
+                style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
+                    <Ionicons name="refresh-outline" size={20} color="#ef4444" />
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-                </Pressable>
-              </View>
-
-              <View style={{ marginTop: 'auto', paddingBottom: 20, alignItems: 'center' }}>
-                <ThemedText style={{ fontSize: 12, color: '#94a3b8' }}>Zoom Level: {currentZoom.toFixed(1)}x</ThemedText>
-                <Pressable onPress={handleResetZoomPan} style={{ marginTop: 8 }}>
-                  <ThemedText style={{ color: tint, fontWeight: '700', fontSize: 13 }}>Reset View</ThemedText>
-                </Pressable>
-              </View>
-            </Animated.View>
+                  <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Reset All Data</ThemedText>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </Pressable>
+            </View>
           </View>
-        </Modal>
-      )}
+
+          <View style={{ marginTop: 40, paddingBottom: 40, alignItems: 'center' }}>
+            <ThemedText style={{ fontSize: 12, color: '#94a3b8' }}>Zoom Level: {currentZoom.toFixed(1)}x</ThemedText>
+            <Pressable onPress={handleResetZoomPan} style={{ marginTop: 8 }}>
+              <ThemedText style={{ color: tint, fontWeight: '700', fontSize: 13 }}>Reset View</ThemedText>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </SideTray>
+
+      <SideTray
+        isOpen={rightTrayOpen}
+        onClose={() => setRightTrayOpen(false)}
+        side="right"
+        title="Member Details"
+      >
+        {selectedMember ? (
+          <ScrollView style={{ padding: 16 }}>
+            <View style={{ alignItems: 'center', marginBottom: 24 }}>
+              {selectedMember.photo ? (
+                <Image source={{ uri: selectedMember.photo }} style={{ width: 120, height: 120, borderRadius: 60 }} />
+              ) : (
+                <View style={{ width: 120, height: 120, borderRadius: 60, backgroundColor: tint, justifyContent: 'center', alignItems: 'center' }}>
+                  <ThemedText style={{ color: '#fff', fontSize: 48, fontWeight: '800' }}>
+                    {selectedMember.name.charAt(0).toUpperCase()}
+                  </ThemedText>
+                </View>
+              )}
+              <ThemedText style={{ fontSize: 24, fontWeight: '800', marginTop: 16 }}>{selectedMember.name}</ThemedText>
+              {selectedMember.dob && (
+                <ThemedText style={{ opacity: 0.6, marginTop: 4 }}>Born: {selectedMember.dob}</ThemedText>
+              )}
+            </View>
+
+            <View style={{ gap: 20 }}>
+              <Pressable 
+                onPress={() => { setRightTrayOpen(false); router.push(`/member?id=${selectedMember.id}`); }}
+                style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={[styles.settingsIcon, { backgroundColor: tint + '15' }]}>
+                    <Ionicons name="person-outline" size={20} color={tint} />
+                  </View>
+                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>View Full Profile</ThemedText>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </Pressable>
+
+              <View>
+                <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Relations</ThemedText>
+                {selectedMember.relations && selectedMember.relations.length > 0 ? (
+                  <View style={{ gap: 10 }}>
+                    {selectedMember.relations.map((rel, idx) => {
+                      const target = members.find(m => m.id === rel.targetId);
+                      if (!target) return null;
+                      return (
+                        <Pressable 
+                          key={idx}
+                          onPress={() => { setSelectedMemberId(target.id); }}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 12, backgroundColor: cardColor, borderWidth: 1, borderColor: borderColor }}
+                        >
+                          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: tint + '15', justifyContent: 'center', alignItems: 'center' }}>
+                            <ThemedText style={{ fontSize: 16, color: tint, fontWeight: '800' }}>{target.name.charAt(0)}</ThemedText>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <ThemedText style={{ fontWeight: '600', color: textColor }}>{target.name}</ThemedText>
+                            <ThemedText style={{ fontSize: 12, color: '#94a3b8', textTransform: 'capitalize' }}>{rel.type}</ThemedText>
+                          </View>
+                          <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <View style={{ padding: 20, alignItems: 'center', backgroundColor: cardColor, borderRadius: 12, borderStyle: 'dashed', borderWidth: 1, borderColor: borderColor }}>
+                    <ThemedText style={{ opacity: 0.5, fontStyle: 'italic' }}>No relations added yet.</ThemedText>
+                  </View>
+                )}
+              </View>
+            </View>
+          </ScrollView>
+        ) : (
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 }}>
+            <Ionicons name="person-outline" size={48} color={borderColor} />
+            <ThemedText style={{ marginTop: 16, opacity: 0.5 }}>Select a member to see details</ThemedText>
+          </View>
+        )}
+      </SideTray>
 
     </ThemedView>
   );
@@ -1474,6 +1573,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  categoryTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
   searchResults: {
     position: 'absolute',
     top: 48,
@@ -1501,24 +1609,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   inlineLeft: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  drawerOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 2000,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  drawerContent: {
-    width: '80%',
-    maxWidth: 300,
-    height: '100%',
-    padding: 20,
-    paddingTop: Platform.OS === 'ios' ? Math.max(40, insets.top) : 40,
-    borderRightWidth: 1,
-    elevation: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-  },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1000,
@@ -1564,6 +1654,22 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     marginBottom: 12,
+  },
+  dateInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    marginBottom: 12,
+    paddingRight: 12,
+  },
+  dateInput: {
+    flex: 1,
+    padding: 12,
+    fontSize: 16,
+  },
+  calendarIcon: {
+    padding: 4,
   },
   label: {
     fontSize: 14,

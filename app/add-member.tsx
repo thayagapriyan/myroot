@@ -40,7 +40,10 @@ export default function AddMemberScreen() {
     if (Platform.OS === 'android') {
       setShowDatePicker(false);
       if (selectedDate) {
-        setDob(selectedDate.toISOString().split('T')[0]);
+        const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+        const d = String(selectedDate.getDate()).padStart(2, '0');
+        const y = selectedDate.getFullYear();
+        setDob(`${m}/${d}/${y}`);
       }
     } else {
       if (selectedDate) setTempDate(selectedDate);
@@ -48,8 +51,24 @@ export default function AddMemberScreen() {
   };
 
   const confirmDate = () => {
-    setDob(tempDate.toISOString().split('T')[0]);
+    const m = String(tempDate.getMonth() + 1).padStart(2, '0');
+    const d = String(tempDate.getDate()).padStart(2, '0');
+    const y = tempDate.getFullYear();
+    setDob(`${m}/${d}/${y}`);
     setShowDatePicker(false);
+  };
+
+  const handleDateInputChange = (text: string) => {
+    let cleaned = text.replace(/\D/g, '');
+    cleaned = cleaned.substring(0, 8);
+    let formatted = cleaned;
+    if (cleaned.length > 2) {
+      formatted = cleaned.substring(0, 2) + '/' + cleaned.substring(2);
+    }
+    if (cleaned.length > 4) {
+      formatted = formatted.substring(0, 5) + '/' + formatted.substring(5);
+    }
+    setDob(formatted);
   };
 
   return (
@@ -79,15 +98,22 @@ export default function AddMemberScreen() {
 
           <View style={styles.inputGroup}>
             <ThemedText style={styles.label}>Date of Birth</ThemedText>
-            <Pressable 
-              style={[styles.input, { backgroundColor: inputBg, borderColor: border, flexDirection: 'row', alignItems: 'center' }]} 
-              onPress={() => setShowDatePicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={20} color={textColor} style={{ marginRight: 10 }} />
-              <ThemedText style={{ color: dob ? textColor : '#94a3b8', fontSize: 16 }}>
-                {dob || 'Select Date'}
-              </ThemedText>
-            </Pressable>
+            <View style={[styles.dateInputContainer, { borderColor: border, backgroundColor: inputBg }]}>
+              <TextInput
+                placeholder="MM/DD/YYYY"
+                placeholderTextColor="#94a3b8"
+                value={dob}
+                onChangeText={handleDateInputChange}
+                keyboardType="number-pad"
+                style={[styles.dateInput, { color: textColor }]}
+              />
+              <Pressable 
+                onPress={() => setShowDatePicker(true)}
+                style={styles.calendarIcon}
+              >
+                <Ionicons name="calendar-outline" size={20} color={tint} />
+              </Pressable>
+            </View>
           </View>
 
           <Pressable style={[styles.saveButton, { backgroundColor: tint }]} onPress={handleSave}>
@@ -150,6 +176,21 @@ const styles = StyleSheet.create({
   inputGroup: { gap: 8 },
   label: { fontSize: 14, fontWeight: '700', color: '#64748b', marginLeft: 4 },
   input: { borderWidth: 1, borderRadius: 16, padding: 16, fontSize: 16 },
+  dateInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingRight: 12,
+  },
+  dateInput: {
+    flex: 1,
+    padding: 16,
+    fontSize: 16,
+  },
+  calendarIcon: {
+    padding: 4,
+  },
   saveButton: { borderRadius: 16, padding: 18, alignItems: 'center', marginTop: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5 },
   saveButtonText: { color: '#fff', fontSize: 18, fontWeight: '700' },
   cancelButton: { padding: 16, alignItems: 'center' },

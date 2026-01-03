@@ -184,10 +184,28 @@ export default function MemberScreen() {
   };
 
   const formatDate = (d: Date) => {
-    const y = d.getFullYear();
     const m = `${d.getMonth() + 1}`.padStart(2, '0');
     const day = `${d.getDate()}`.padStart(2, '0');
-    return `${y}-${m}-${day}`;
+    const y = d.getFullYear();
+    return `${m}/${day}/${y}`;
+  };
+
+  const handleDateInputChange = (text: string, setter: (val: string) => void) => {
+    // Remove non-numeric characters
+    let cleaned = text.replace(/\D/g, '');
+    
+    // Limit to 8 digits (MMDDYYYY)
+    cleaned = cleaned.substring(0, 8);
+    
+    let formatted = cleaned;
+    if (cleaned.length > 2) {
+      formatted = cleaned.substring(0, 2) + '/' + cleaned.substring(2);
+    }
+    if (cleaned.length > 4) {
+      formatted = formatted.substring(0, 5) + '/' + formatted.substring(5);
+    }
+    
+    setter(formatted);
   };
 
   const handleOpenDatePicker = (source: 'profile' | 'adding' | 'dod' = 'profile') => {
@@ -556,7 +574,7 @@ export default function MemberScreen() {
               <Pressable
                 key={tab}
                 onPress={() => setActiveTab(tab)}
-                style={[styles.tab, activeTab === tab && { borderBottomColor: tint }]}
+                style={[styles.tab, { flex: 1 }, activeTab === tab && { borderBottomColor: tint }]}
               >
                 <ThemedText style={[styles.tabText, activeTab === tab && { color: tint, fontWeight: '800' }]}>
                   {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -581,46 +599,40 @@ export default function MemberScreen() {
                 ))}
               </View>
               <ThemedText style={styles.label}>Date of Birth</ThemedText>
-              {Platform.OS === 'web' ? (
+              <View style={[styles.dateInputContainer, { borderColor: border }]}>
                 <TextInput
-                  placeholder="DOB (YYYY-MM-DD)"
+                  placeholder="MM/DD/YYYY"
                   placeholderTextColor="#94a3b8"
                   value={dobInput}
-                  onChangeText={setDobInput}
-                  style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+                  onChangeText={(t) => handleDateInputChange(t, setDobInput)}
+                  keyboardType="number-pad"
+                  style={[styles.dateInput, { color: textColor }]}
                 />
-              ) : (
-                <Pressable onPress={() => handleOpenDatePicker('profile')}>
-                  <TextInput
-                    placeholder="DOB (YYYY-MM-DD)"
-                    placeholderTextColor="#94a3b8"
-                    value={dobInput}
-                    editable={false}
-                    style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0', pointerEvents: 'none' }]}
-                  />
+                <Pressable 
+                  onPress={() => handleOpenDatePicker('profile')}
+                  style={styles.calendarIcon}
+                >
+                  <Ionicons name="calendar-outline" size={20} color={tint} />
                 </Pressable>
-              )}
+              </View>
 
               <ThemedText style={styles.label}>Date of Death (Optional)</ThemedText>
-              {Platform.OS === 'web' ? (
+              <View style={[styles.dateInputContainer, { borderColor: border }]}>
                 <TextInput
-                  placeholder="DOD (YYYY-MM-DD)"
+                  placeholder="MM/DD/YYYY"
                   placeholderTextColor="#94a3b8"
                   value={dodInput}
-                  onChangeText={setDodInput}
-                  style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0' }]}
+                  onChangeText={(t) => handleDateInputChange(t, setDodInput)}
+                  keyboardType="number-pad"
+                  style={[styles.dateInput, { color: textColor }]}
                 />
-              ) : (
-                <Pressable onPress={() => handleOpenDatePicker('dod')}>
-                  <TextInput
-                    placeholder="DOD (YYYY-MM-DD)"
-                    placeholderTextColor="#94a3b8"
-                    value={dodInput}
-                    editable={false}
-                    style={[styles.input, { borderColor: border, color: textColor, backgroundColor: '#fff0', pointerEvents: 'none' }]}
-                  />
+                <Pressable 
+                  onPress={() => handleOpenDatePicker('dod')}
+                  style={styles.calendarIcon}
+                >
+                  <Ionicons name="calendar-outline" size={20} color={tint} />
                 </Pressable>
-              )}
+              </View>
               <ThemedText style={styles.metaText}>Age: {computeAge(dobInput) ?? '—'}</ThemedText>
               <Pressable style={[styles.saveBtn, { backgroundColor: tint }]} onPress={handleSaveProfileInfo}>
                 <ThemedText style={{ color: '#fff', fontWeight: '800' }}>Save Changes</ThemedText>
@@ -887,7 +899,7 @@ const styles = StyleSheet.create({
   profileDob: { fontSize: 14, color: '#64748b', marginTop: 4 },
   
   tabBar: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  tab: { paddingVertical: 12, marginRight: 24, borderBottomWidth: 3, borderBottomColor: 'transparent' },
+  tab: { paddingVertical: 12, borderBottomWidth: 3, borderBottomColor: 'transparent', alignItems: 'center' },
   tabText: { fontSize: 15, fontWeight: '600', color: '#94a3b8' },
 
   section: { paddingHorizontal: 20, marginBottom: 32 },
@@ -930,6 +942,22 @@ const styles = StyleSheet.create({
   toggle: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
   toggleText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
   input: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 16 },
+  dateInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    marginBottom: 16,
+    paddingRight: 12,
+  },
+  dateInput: {
+    flex: 1,
+    padding: 12,
+    fontSize: 16,
+  },
+  calendarIcon: {
+    padding: 4,
+  },
   metaText: { fontSize: 14, color: '#64748b', marginBottom: 12 },
   saveBtn: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12 },
   memberList: { maxHeight: 200, marginBottom: 16 },

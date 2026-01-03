@@ -134,7 +134,10 @@ export default function AddRelationScreen() {
     if (Platform.OS === 'android') {
       setShowDatePicker(false);
       if (selectedDate) {
-        setNewTargetDob(selectedDate.toISOString().split('T')[0]);
+        const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+        const d = String(selectedDate.getDate()).padStart(2, '0');
+        const y = selectedDate.getFullYear();
+        setNewTargetDob(`${m}/${d}/${y}`);
       }
     } else {
       if (selectedDate) setTempDate(selectedDate);
@@ -142,8 +145,24 @@ export default function AddRelationScreen() {
   };
 
   const confirmDate = () => {
-    setNewTargetDob(tempDate.toISOString().split('T')[0]);
+    const m = String(tempDate.getMonth() + 1).padStart(2, '0');
+    const d = String(tempDate.getDate()).padStart(2, '0');
+    const y = tempDate.getFullYear();
+    setNewTargetDob(`${m}/${d}/${y}`);
     setShowDatePicker(false);
+  };
+
+  const handleDateInputChange = (text: string) => {
+    let cleaned = text.replace(/\D/g, '');
+    cleaned = cleaned.substring(0, 8);
+    let formatted = cleaned;
+    if (cleaned.length > 2) {
+      formatted = cleaned.substring(0, 2) + '/' + cleaned.substring(2);
+    }
+    if (cleaned.length > 4) {
+      formatted = formatted.substring(0, 5) + '/' + formatted.substring(5);
+    }
+    setNewTargetDob(formatted);
   };
 
   return (
@@ -213,15 +232,22 @@ export default function AddRelationScreen() {
                 value={newTargetName} 
                 onChangeText={setNewTargetName} 
               />
-              <Pressable 
-                style={[styles.input, { backgroundColor: inputBg, borderColor: border, flexDirection: 'row', alignItems: 'center' }]} 
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Ionicons name="calendar-outline" size={20} color={textColor} style={{ marginRight: 10 }} />
-                <ThemedText style={{ color: newTargetDob ? textColor : '#94a3b8' }}>
-                  {newTargetDob || 'Date of Birth (Optional)'}
-                </ThemedText>
-              </Pressable>
+              <View style={[styles.dateInputContainer, { borderColor: border, backgroundColor: inputBg }]}>
+                <TextInput
+                  placeholder="MM/DD/YYYY"
+                  placeholderTextColor="#94a3b8"
+                  value={newTargetDob}
+                  onChangeText={handleDateInputChange}
+                  keyboardType="number-pad"
+                  style={[styles.dateInput, { color: textColor }]}
+                />
+                <Pressable 
+                  onPress={() => setShowDatePicker(true)}
+                  style={styles.calendarIcon}
+                >
+                  <Ionicons name="calendar-outline" size={20} color={tint} />
+                </Pressable>
+              </View>
             </View>
           ) : (
             <View style={styles.targetList}>
@@ -312,6 +338,22 @@ const styles = StyleSheet.create({
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
   chipText: { fontSize: 13, fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginTop: 12 },
+  dateInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingRight: 12,
+    marginTop: 12,
+  },
+  dateInput: {
+    flex: 1,
+    padding: 16,
+    fontSize: 16,
+  },
+  calendarIcon: {
+    padding: 4,
+  },
   toggleContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 12, padding: 4, marginBottom: 12 },
   toggle: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8 },
   toggleText: { fontSize: 14, fontWeight: '700', color: '#64748b' },
