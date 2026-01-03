@@ -2,7 +2,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
-import { Member } from '@/types/Family';
+import { Member } from '@/types/family';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -78,11 +78,22 @@ export default function MemberScreen() {
     return age >= 0 ? age : undefined;
   };
 
+  const findMemberNested = (list: Member[], targetId: string): Member | undefined => {
+    for (const m of list) {
+      if (m.id === targetId) return m;
+      if (m.subTree) {
+        const found = findMemberNested(m.subTree, targetId);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+
   useEffect(() => {
     (async () => {
       const list = await FamilyService.getFamily();
       setMembers(list);
-      const found = list.find((m) => m.id === id);
+      const found = findMemberNested(list, id as string);
       setMember(found || null);
       if (found) {
         setEditedName(found.name);
@@ -681,7 +692,7 @@ export default function MemberScreen() {
 
               {member.relations && member.relations.length > 0 ? (
                 member.relations.map((rel, idx) => {
-                  const target = members.find(m => m.id === rel.targetId);
+                  const target = findMemberNested(members, rel.targetId);
                   return (
                     <Pressable 
                       key={idx} 

@@ -7,6 +7,7 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, {
     runOnJS,
+    useAnimatedReaction,
     useAnimatedStyle,
     useSharedValue,
     withSpring,
@@ -21,6 +22,7 @@ interface ZoomPanContainerProps {
   minZoom?: number;
   maxZoom?: number;
   onZoomChange?: (zoom: number) => void;
+  onTransform?: (x: number, y: number, zoom: number) => void;
   initialFocusX?: number;
   initialFocusY?: number;
 }
@@ -41,6 +43,7 @@ export const ZoomPanContainer = React.forwardRef<ZoomPanContainerHandle, ZoomPan
       minZoom = 0.5,
       maxZoom = 3,
       onZoomChange,
+      onTransform,
       initialFocusX,
       initialFocusY,
     },
@@ -53,6 +56,15 @@ export const ZoomPanContainer = React.forwardRef<ZoomPanContainerHandle, ZoomPan
     const translateY = useSharedValue(0);
     const savedTranslateX = useSharedValue(0);
     const savedTranslateY = useSharedValue(0);
+
+    useAnimatedReaction(
+      () => ({ x: translateX.value, y: translateY.value, s: scale.value }),
+      (current) => {
+        if (onTransform) {
+          runOnJS(onTransform)(current.x, current.y, current.s);
+        }
+      }
+    );
 
     const focusOn = useCallback((x: number, y: number, zoom: number = 1) => {
       // Calculate translation to center the point (x, y) in the container

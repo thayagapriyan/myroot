@@ -1,11 +1,12 @@
 import { SideTray } from '@/components/SideTray';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { MiniMap } from '@/components/tree/MiniMap';
 import { TreeNode } from '@/components/tree/TreeNode';
 import { ZoomPanContainer } from '@/components/ZoomPanContainer';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
-import { Member } from '@/types/Family';
+import { Member } from '@/types/family';
 import { calculateTreeLayout } from '@/utils/treeLayout';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,14 +19,12 @@ import * as Sharing from 'expo-sharing';
 import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 export default function TreeScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const [members, setMembers] = useState<Member[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [activeMemberId, setActiveMemberId] = useState<string | null>(null);
@@ -37,20 +36,62 @@ export default function TreeScreen() {
   const [leftTrayOpen, setLeftTrayOpen] = useState(false);
   const [rightTrayOpen, setRightTrayOpen] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
   const bgColor = useThemeColor({}, 'background');
   const cardColor = useThemeColor({}, 'card');
   const borderColor = useThemeColor({}, 'border');
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
 
+  const findMemberNested = useCallback((list: Member[], id: string): Member | undefined => {
+    for (const m of list) {
+      if (m.id === id) return m;
+      if (m.subTree) {
+        const found = findMemberNested(m.subTree, id);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }, []);
+
   const activeUser = useMemo(() => {
     const id = pinnedMemberId || activeUserId;
-    return members.find(m => m.id === id) || members.find(m => m.id === activeUserId);
-  }, [members, activeUserId, pinnedMemberId]);
+    if (!id) return undefined;
+    return findMemberNested(members, id);
+  }, [members, activeUserId, pinnedMemberId, findMemberNested]);
 
   const selectedMember = useMemo(() => {
-    return members.find(m => m.id === selectedMemberId);
-  }, [members, selectedMemberId]);
+    if (!selectedMemberId) return undefined;
+    return findMemberNested(members, selectedMemberId);
+  }, [members, selectedMemberId, findMemberNested]);
+
+  const visibleMembers = useMemo(() => {
+    if (!focusMemberId) {
+      // Main tree: show only top-level members
+      return members;
+    }
+    // Spouse tree: show the spouse themselves (from main tree) 
+    // PLUS anyone explicitly added to this spouse's nested subTree (recursively)
+    const spouse = findMemberNested(members, focusMemberId);
+    if (!spouse) return [];
+    
+    const flattened: Member[] = [spouse];
+    const collect = (list: Member[]) => {
+      list.forEach(m => {
+        flattened.push(m);
+        if (m.subTree) collect(m.subTree);
+      });
+    };
+    if (spouse.subTree) collect(spouse.subTree);
+    
+    // Remove duplicates just in case
+    const seen = new Set<string>();
+    return flattened.filter(m => {
+      if (seen.has(m.id)) return false;
+      seen.add(m.id);
+      return true;
+    });
+  }, [members, focusMemberId, findMemberNested]);
 
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
@@ -70,6 +111,8 @@ export default function TreeScreen() {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [currentZoom, setCurrentZoom] = useState(1);
+  const [currentTranslateX, setCurrentTranslateX] = useState(0);
+  const [currentTranslateY, setCurrentTranslateY] = useState(0);
   const [containerDims, setContainerDims] = useState({ width: SCREEN_W, height: SCREEN_H - 240 });
   const [toast, setToast] = useState<string | null>(null);
   const toastsRef = useRef<string[]>([]);
@@ -162,12 +205,12 @@ export default function TreeScreen() {
     setPinnedMemberId(pinnedId);
     
     // Prioritize pinned member for active user (header icon)
-    if (pinnedId && ensured.some(m => m.id === pinnedId)) {
+    if (pinnedId && findMemberNested(ensured, pinnedId)) {
       setActiveUserId(pinnedId);
       await AsyncStorage.setItem('activeUserId', pinnedId);
     } else {
       const savedActiveId = await AsyncStorage.getItem('activeUserId');
-      if (savedActiveId && ensured.some(m => m.id === savedActiveId)) {
+      if (savedActiveId && findMemberNested(ensured, savedActiveId)) {
         setActiveUserId(savedActiveId);
       } else if (ensured.length > 0) {
         setActiveUserId(ensured[0].id);
@@ -177,12 +220,23 @@ export default function TreeScreen() {
 
     setActiveMemberId(null);
     if (ensured.length <= 1) setIsEditing(false);
-  }, [ensureDefaultMember]);
+  }, [ensureDefaultMember, findMemberNested]);
 
   const filteredMembers = useMemo(() => {
     if (!searchQuery.trim()) return [];
-    return members.filter(m => 
-      m.name.toLowerCase().includes(searchQuery.toLowerCase())
+    const query = searchQuery.toLowerCase();
+    
+    const allMembers: Member[] = [];
+    const flatten = (list: Member[]) => {
+      list.forEach(m => {
+        allMembers.push(m);
+        if (m.subTree) flatten(m.subTree);
+      });
+    };
+    flatten(members);
+
+    return allMembers.filter(m => 
+      m.name.toLowerCase().includes(query)
     ).slice(0, 5);
   }, [members, searchQuery]);
 
@@ -208,8 +262,14 @@ export default function TreeScreen() {
       seen.add(id);
 
       const dob = typeof (item as any).dob === 'string' ? (item as any).dob : undefined;
+      const dod = typeof (item as any).dod === 'string' ? (item as any).dod : undefined;
+      const sex = typeof (item as any).sex === 'string' ? (item as any).sex : undefined;
+      const age = typeof (item as any).age === 'number' ? (item as any).age : undefined;
       const email = typeof (item as any).email === 'string' ? (item as any).email : undefined;
       const photo = typeof (item as any).photo === 'string' ? (item as any).photo : undefined;
+      const notes = typeof (item as any).notes === 'string' ? (item as any).notes : undefined;
+      const subTreeRaw = (item as any).subTree;
+      const subTree = Array.isArray(subTreeRaw) ? normalizeImportedFamily(subTreeRaw) || undefined : undefined;
 
       const relationsRaw = (item as any).relations;
       const relations = Array.isArray(relationsRaw)
@@ -222,17 +282,45 @@ export default function TreeScreen() {
             .filter((r: any) => r.targetId && r.targetId !== id)
         : [];
 
-      sanitized.push({ id, name: name.trim(), dob, email, photo, relations });
+      sanitized.push({ 
+        id, 
+        name: name.trim(), 
+        dob, 
+        dod, 
+        sex, 
+        age, 
+        email, 
+        photo, 
+        notes, 
+        subTree, 
+        relations 
+      });
     }
 
     if (sanitized.length === 0) return [];
 
     // Drop relations that reference missing members.
-    const idSet = new Set(sanitized.map((m) => m.id));
-    return sanitized.map((m) => ({
-      ...m,
-      relations: (m.relations || []).filter((r) => idSet.has(r.targetId)),
-    }));
+    // We need to collect all IDs from the entire nested structure.
+    const getAllIds = (list: Member[]): string[] => {
+      let ids: string[] = [];
+      list.forEach(m => {
+        ids.push(m.id);
+        if (m.subTree) ids = ids.concat(getAllIds(m.subTree));
+      });
+      return ids;
+    };
+
+    const idSet = new Set(getAllIds(sanitized));
+
+    const filterRelations = (list: Member[]): Member[] => {
+      return list.map((m) => ({
+        ...m,
+        relations: (m.relations || []).filter((r) => idSet.has(r.targetId)),
+        subTree: m.subTree ? filterRelations(m.subTree) : undefined,
+      }));
+    };
+
+    return filterRelations(sanitized);
   }, []);
 
   const openExportModal = useCallback(() => {
@@ -343,7 +431,7 @@ export default function TreeScreen() {
       { text: 'Copy JSON', onPress: openExportModal },
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [exportToFile, exportToZipWeb, openExportModal]);
+  }, [exportToFile, openExportModal]);
 
   const closeExport = useCallback(() => {
     setExportOpen(false);
@@ -557,14 +645,16 @@ export default function TreeScreen() {
     ]);
   };
 
-  const { positions, edges, spouseEdges } = useMemo(() => {
+  const layout = useMemo(() => {
     try {
-      return calculateTreeLayout(members, SCREEN_W);
+      return calculateTreeLayout(visibleMembers, SCREEN_W, focusMemberId);
     } catch (err) {
       console.error('Layout calculation failed:', err);
       return { layers: [], positions: {}, edges: [], spouseEdges: [] };
     }
-  }, [members]);
+  }, [visibleMembers, focusMemberId]);
+
+  const { positions, edges, spouseEdges } = layout;
 
   const { centeredPositions, contentWidth, contentHeight } = useMemo(() => {
     const nodeW = 140;
@@ -599,10 +689,18 @@ export default function TreeScreen() {
   }, [positions]);
 
   const handleResetZoomPan = useCallback(() => {
-    const rootMember = members[0];
+    const rootMember = focusMemberId ? findMemberNested(members, focusMemberId) : visibleMembers[0];
     const fitZoomW = containerDims.width / contentWidth;
     const fitZoomH = containerDims.height / contentHeight;
     const fitZoom = Math.max(0.05, Math.min(1, fitZoomW, fitZoomH) * 0.9);
+
+    // If we have a focusMemberId, always center on them at a comfortable zoom initially
+    if (focusMemberId && rootMember && centeredPositions[rootMember.id]) {
+      const pos = centeredPositions[rootMember.id];
+      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.8);
+      setCurrentZoom(0.8);
+      return;
+    }
 
     // If we are already zoomed out (less than 0.4), focus back on root at 0.8x
     if (currentZoom < 0.4 && rootMember && centeredPositions[rootMember.id]) {
@@ -616,7 +714,7 @@ export default function TreeScreen() {
       zoomPanContainerRef.current?.focusOn?.(centerX, centerY, fitZoom);
       setCurrentZoom(fitZoom);
     }
-  }, [members, centeredPositions, containerDims, contentWidth, contentHeight, currentZoom]);
+  }, [members, visibleMembers, focusMemberId, centeredPositions, containerDims, contentWidth, contentHeight, currentZoom, findMemberNested]);
 
   const edgeColors = useMemo(() => {
     const palette = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
@@ -723,42 +821,73 @@ export default function TreeScreen() {
 
     const sourceId = relationModal.sourceId;
     const type = relationModal.type;
-    const list: Member[] = [...members];
+    
+    // Helper to perform immutable update in nested structure
+    const updateNested = (targetList: Member[], id: string, updater: (m: Member) => Member): Member[] => {
+      return targetList.map(m => {
+        if (m.id === id) {
+          return updater(m);
+        }
+        if (m.subTree) {
+          return { ...m, subTree: updateNested(m.subTree, id, updater) };
+        }
+        return m;
+      });
+    };
 
     // Haptic on save (mobile)
     try { 
       if (Platform.OS !== 'web') await (await import('expo-haptics')).notificationAsync((await import('expo-haptics')).NotificationFeedbackType.Success);
     } catch {}
 
-    const addRelationPair = (id1: string, id2: string, type1to2: string) => {
-      const m1 = list.find(m => m.id === id1);
-      const m2 = list.find(m => m.id === id2);
-      if (!m1 || !m2) return;
-      m1.relations = m1.relations || [];
-      m2.relations = m2.relations || [];
-      if (!m1.relations.find((r) => r.targetId === id2 && r.type === type1to2)) {
-        m1.relations.push({ type: type1to2, targetId: id2 });
-      }
-      const type2to1 = reciprocal(type1to2);
-      if (!m2.relations.find((r) => r.targetId === id1 && r.type === type2to1)) {
-        m2.relations.push({ type: type2to1, targetId: id1 });
-      }
+    const addRelationPair = (currentList: Member[], id1: string, id2: string, type1to2: string): Member[] => {
+      let next = updateNested(currentList, id1, (m1) => {
+        const relations = [...(m1.relations || [])];
+        if (!relations.find((r) => r.targetId === id2 && r.type === type1to2)) {
+          relations.push({ type: type1to2, targetId: id2 });
+        }
+        return { ...m1, relations };
+      });
+
+      next = updateNested(next, id2, (m2) => {
+        const relations = [...(m2.relations || [])];
+        const type2to1 = reciprocal(type1to2);
+        if (!relations.find((r) => r.targetId === id1 && r.type === type2to1)) {
+          relations.push({ type: type2to1, targetId: id1 });
+        }
+        return { ...m2, relations };
+      });
+      
+      return next;
     };
 
     let finalTargetId: string | null = targetId;
+    let updatedList = [...members];
+
     if (useNewTarget) {
       if (!newTargetName.trim()) {
         Alert.alert('Name required', 'Enter a name to create the new member.');
         return;
       }
       finalTargetId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      list.push({ 
+      const newMember: Member = { 
         id: finalTargetId, 
         name: newTargetName.trim(), 
         sex: newTargetSex,
         dob: newTargetDob,
         relations: [] 
-      });
+      };
+
+      if (focusMemberId) {
+        // Add to the spouse's subTree immutably
+        updatedList = updateNested(members, focusMemberId, (spouse) => ({
+          ...spouse,
+          subTree: [...(spouse.subTree || []), newMember]
+        }));
+      } else {
+        // Add to main tree
+        updatedList = [...members, newMember];
+      }
     }
 
     if (!finalTargetId) {
@@ -770,26 +899,39 @@ export default function TreeScreen() {
       return;
     }
 
-    addRelationPair(sourceId, finalTargetId, type);
+    updatedList = addRelationPair(updatedList, sourceId, finalTargetId, type);
 
     // Keep behavior consistent with Add Relation screen for joint parenting + spouse child-linking.
+    const findMember = (targetList: Member[], id: string): Member | undefined => {
+      for (const m of targetList) {
+        if (m.id === id) return m;
+        if (m.subTree) {
+          const found = findMember(m.subTree, id);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+
     if (type === 'child') {
-      const sourceMember = list.find(m => m.id === sourceId);
+      const sourceMember = findMember(updatedList, sourceId);
       const spouseRel = sourceMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
-      if (spouseRel) addRelationPair(spouseRel.targetId, finalTargetId, 'child');
+      if (spouseRel) updatedList = addRelationPair(updatedList, spouseRel.targetId, finalTargetId, 'child');
     } else if (type === 'spouse') {
-      const sourceMember = list.find(m => m.id === sourceId);
+      const sourceMember = findMember(updatedList, sourceId);
       const childrenRels = sourceMember?.relations?.filter((r) => r.type === 'child') || [];
-      childrenRels.forEach((c) => addRelationPair(finalTargetId!, c.targetId, 'child'));
+      childrenRels.forEach((c) => {
+        updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'child');
+      });
     }
 
-    await FamilyService.saveFamily(list);
-    setMembers(list);
+    await FamilyService.saveFamily(updatedList);
+    setMembers(updatedList);
     closeRelationModal();
 
     // show toast (queued)
     enqueueToast('Relation saved');
-  }, [closeRelationModal, members, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast]);
+  }, [closeRelationModal, members, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast, focusMemberId]);
 
   const handleDeleteMember = useCallback(
     async (id: string) => {
@@ -799,21 +941,17 @@ export default function TreeScreen() {
       }
 
       const performDelete = async () => {
-        const memberToDelete = members.find(m => m.id === id);
-        if (memberToDelete?.photo && memberToDelete.photo.startsWith('file://')) {
-          try {
-            await FileSystem.deleteAsync(memberToDelete.photo, { idempotent: true });
-          } catch (err) {
-            console.warn('Could not delete photo file:', err);
-          }
-        }
+        const findAndDelete = (targetList: Member[], targetId: string): Member[] => {
+          return targetList
+            .filter((m) => m.id !== targetId)
+            .map((m) => ({
+              ...m,
+              relations: (m.relations || []).filter((r) => r.targetId !== targetId),
+              subTree: m.subTree ? findAndDelete(m.subTree, targetId) : undefined,
+            }));
+        };
 
-        const next = members
-          .filter((m) => m.id !== id)
-          .map((m) => ({
-            ...m,
-            relations: (m.relations || []).filter((r) => r.targetId !== id),
-          }));
+        const next = findAndDelete(members, id);
 
         await FamilyService.saveFamily(next);
         setMembers(next);
@@ -913,6 +1051,23 @@ export default function TreeScreen() {
         </View>
       )}
 
+      {focusMemberId && (
+        <View style={styles.focusHeader}>
+          <View style={[styles.focusPill, { backgroundColor: tint }]}>
+            <Ionicons name="git-network-outline" size={16} color="#fff" />
+            <ThemedText style={styles.focusPillText}>
+              {findMemberNested(members, focusMemberId)?.name}&apos;s Family Tree
+            </ThemedText>
+            <Pressable 
+              onPress={() => { setFocusMemberId(null); setTimeout(() => handleResetZoomPan(), 100); }}
+              style={styles.focusCloseBtn}
+            >
+              <Ionicons name="close-circle" size={20} color="#fff" />
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       <View 
         style={{ flex: 1 }} 
         onLayout={(e) => {
@@ -931,15 +1086,20 @@ export default function TreeScreen() {
           minZoom={0.05}
           maxZoom={3}
           onZoomChange={setCurrentZoom}
+          onTransform={(x, y, s) => {
+            setCurrentTranslateX(x);
+            setCurrentTranslateY(y);
+            setCurrentZoom(s);
+          }}
           initialFocusX={
             pinnedMemberId && centeredPositions[pinnedMemberId] 
               ? centeredPositions[pinnedMemberId].x + 70 
-              : (members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].x + 70 : undefined)
+              : (visibleMembers[0] && centeredPositions[visibleMembers[0].id] ? centeredPositions[visibleMembers[0].id].x + 70 : undefined)
           }
           initialFocusY={
             pinnedMemberId && centeredPositions[pinnedMemberId] 
               ? centeredPositions[pinnedMemberId].y + 40 
-              : (members[0] && centeredPositions[members[0].id] ? centeredPositions[members[0].id].y + 40 : undefined)
+              : (visibleMembers[0] && centeredPositions[visibleMembers[0].id] ? centeredPositions[visibleMembers[0].id].y + 40 : undefined)
           }
         >
           <Pressable style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }} onPress={() => setExpandedNodeId(null)}>
@@ -1008,7 +1168,7 @@ export default function TreeScreen() {
             </Svg>
 
             {Object.entries(centeredPositions).map(([id, pos]) => {
-              const m = members.find((mm) => mm.id === id);
+              const m = visibleMembers.find((mm) => mm.id === id);
               if (!m) return null;
               
               const colors = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
@@ -1034,6 +1194,19 @@ export default function TreeScreen() {
             })}
           </Pressable>
         </ZoomPanContainer>
+
+        <MiniMap
+          positions={centeredPositions}
+          edges={edges}
+          zoom={currentZoom}
+          translateX={currentTranslateX}
+          translateY={currentTranslateY}
+          containerWidth={containerDims.width}
+          containerHeight={containerDims.height}
+          contentWidth={contentWidth}
+          contentHeight={contentHeight}
+          tint={tint}
+        />
 
         {isEditing && (
           <Pressable
@@ -1124,7 +1297,7 @@ export default function TreeScreen() {
                 </View>
               ) : (
                 <ScrollView style={styles.memberList}>
-                  {members
+                  {visibleMembers
                     .filter((m) => m.id !== relationModal.sourceId)
                     .map((m) => (
                       <Pressable
@@ -1334,6 +1507,21 @@ export default function TreeScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                   </Pressable>
                 )}
+
+                {focusMemberId && (
+                  <Pressable
+                    onPress={() => { setFocusMemberId(null); setLeftTrayOpen(false); setTimeout(() => handleResetZoomPan(), 100); }}
+                    style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={[styles.settingsIcon, { backgroundColor: '#FF950015' }]}>
+                        <Ionicons name="contract-outline" size={20} color="#FF9500" />
+                      </View>
+                      <ThemedText style={{ color: textColor, fontWeight: '600' }}>Exit Focus View</ThemedText>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                  </Pressable>
+                )}
               </View>
             </View>
 
@@ -1434,12 +1622,30 @@ export default function TreeScreen() {
                 <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
               </Pressable>
 
+              <Pressable 
+                onPress={() => { 
+                  setFocusMemberId(selectedMember.id); 
+                  setRightTrayOpen(false);
+                  // Reset zoom/pan to focus on the new root
+                  setTimeout(() => handleResetZoomPan(), 100);
+                }}
+                style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
+                    <Ionicons name="git-network-outline" size={20} color="#5856D6" />
+                  </View>
+                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>Open {selectedMember.name.split(' ')[0]}&apos;s Family Tree</ThemedText>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </Pressable>
+
               <View>
                 <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Relations</ThemedText>
                 {selectedMember.relations && selectedMember.relations.length > 0 ? (
                   <View style={{ gap: 10 }}>
                     {selectedMember.relations.map((rel, idx) => {
-                      const target = members.find(m => m.id === rel.targetId);
+                      const target = findMemberNested(members, rel.targetId);
                       if (!target) return null;
                       return (
                         <Pressable 
@@ -1731,4 +1937,34 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   toast: { position: 'absolute', left: 16, right: 16, bottom: 20, alignItems: 'center', paddingVertical: 12, borderRadius: 12, zIndex: 200, elevation: 10 },
+  focusHeader: {
+    position: 'absolute',
+    top: 12,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  focusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 25,
+    gap: 10,
+    elevation: 5,
+    ...Platform.select({
+      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.15)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 }
+    }),
+  },
+  focusPillText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  focusCloseBtn: {
+    marginLeft: 4,
+    padding: 2,
+  },
 });

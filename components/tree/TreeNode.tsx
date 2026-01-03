@@ -1,5 +1,5 @@
 import { ThemedText } from '@/components/ThemedText';
-import { Member } from '@/types/Family';
+import { Member } from '@/types/family';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import React, { memo, useEffect, useRef } from 'react';
@@ -68,6 +68,12 @@ function TreeNodeInner({ member, position, color, isEditing = false, isPinned = 
           {isPinned && (
             <View style={styles.pinBadge}>
               <Ionicons name="pin" size={10} color="#fff" />
+            </View>
+          )}
+
+          {member.subTree && member.subTree.length > 0 && (
+            <View style={[styles.treeBadge, { backgroundColor: color }]}>
+              <Ionicons name="git-branch" size={10} color="#fff" />
             </View>
           )}
         </Animated.View>
@@ -333,6 +339,19 @@ const styles = StyleSheet.create({
     top: -4,
     right: -4,
     backgroundColor: '#3b82f6',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#fff',
+    zIndex: 10,
+  },
+  treeBadge: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
     width: 18,
     height: 18,
     borderRadius: 9,
