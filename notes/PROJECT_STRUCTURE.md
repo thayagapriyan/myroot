@@ -1,6 +1,16 @@
 # Project Structure (What each folder/file does)
 
-This project is an **Expo Router + React Native + TypeScript** app for managing a **Family Tree**.
+This project is an **Expo Router + React Native + TypeScript** app for managing a **Family Subtree**.
+
+---
+
+## Core Concepts
+
+### Recursive Subtree Model
+The app uses a recursive data structure where each `Member` can contain a `subTree` of other members. This allows for:
+- **Spouse Families**: Rendering a spouse's entire family tree within the main tree.
+- **Reference Nodes**: Members can exist in multiple subtrees (e.g., a person appearing in their own family and their spouse's family) while maintaining synchronized data via shared IDs.
+- **Dynamic Layout**: The layout engine automatically filters edges to only show connections between members currently visible in the active subtree.
 
 ---
 

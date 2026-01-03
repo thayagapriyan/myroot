@@ -12,7 +12,8 @@ export default function RootLayout() {
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack screenOptions={{ 
         headerShadowVisible: false,
-        headerTitleStyle: { fontWeight: '800' },
+        headerTitleStyle: { fontWeight: '900', fontSize: 20, letterSpacing: -0.5 },
+        headerBackTitleVisible: false,
       }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="tree" options={{ title: 'Family Tree' }} />

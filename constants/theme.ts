@@ -5,8 +5,8 @@
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#7c3aed'; // Vibrant violet
-const tintColorDark = '#a78bfa';
+const tintColorLight = '#6366f1'; // Modern Indigo
+const tintColorDark = '#818cf8';
 
 export const Colors = {
   light: {
@@ -17,7 +17,7 @@ export const Colors = {
     tabIconDefault: '#94a3b8',
     tabIconSelected: tintColorLight,
     card: '#ffffff',
-    border: '#e2e8f0',
+    border: '#f1f5f9',
   },
   dark: {
     text: '#f1f5f9',

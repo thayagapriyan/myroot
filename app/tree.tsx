@@ -23,6 +23,17 @@ import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
+const reciprocal = (type: string) => {
+  switch (type) {
+    case 'parent': return 'child';
+    case 'child': return 'parent';
+    case 'spouse':
+    case 'partner':
+    case 'sibling': return type;
+    default: return 'other';
+  }
+};
+
 export default function TreeScreen() {
   const router = useRouter();
   const [members, setMembers] = useState<Member[]>([]);
@@ -37,6 +48,7 @@ export default function TreeScreen() {
   const [rightTrayOpen, setRightTrayOpen] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
+  const [relationSearchQuery, setRelationSearchQuery] = useState('');
   const bgColor = useThemeColor({}, 'background');
   const cardColor = useThemeColor({}, 'card');
   const borderColor = useThemeColor({}, 'border');
@@ -753,18 +765,8 @@ export default function TreeScreen() {
     setTargetId(null);
     setShowDobPicker(false);
     setExpandedNodeId(null);
+    setRelationSearchQuery('');
   }, []);
-
-  const reciprocal = (type: string) => {
-    switch (type) {
-      case 'parent': return 'child';
-      case 'child': return 'parent';
-      case 'spouse':
-      case 'partner':
-      case 'sibling': return type;
-      default: return 'other';
-    }
-  };
 
   const handleOpenDobPicker = () => {
     const base = newTargetDob ? new Date(newTargetDob) : new Date();
@@ -888,6 +890,26 @@ export default function TreeScreen() {
         // Add to main tree
         updatedList = [...members, newMember];
       }
+    } else if (focusMemberId && finalTargetId) {
+      // If selecting an existing member while in a spouse tree, 
+      // add a reference node to that spouse's subTree if they aren't already visible there.
+      const isAlreadyVisible = visibleMembers.some(m => m.id === finalTargetId);
+      if (!isAlreadyVisible) {
+        const existing = findMemberNested(members, finalTargetId);
+        if (existing) {
+          // Create a reference node. We copy basic info so it renders correctly.
+          // We don't copy the subTree to avoid deep duplication, but we keep relations
+          // so they can be updated in sync.
+          const referenceNode: Member = {
+            ...existing,
+            subTree: [] 
+          };
+          updatedList = updateNested(updatedList, focusMemberId, (spouse) => ({
+            ...spouse,
+            subTree: [...(spouse.subTree || []), referenceNode]
+          }));
+        }
+      }
     }
 
     if (!finalTargetId) {
@@ -931,7 +953,7 @@ export default function TreeScreen() {
 
     // show toast (queued)
     enqueueToast('Relation saved');
-  }, [closeRelationModal, members, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast, focusMemberId]);
+  }, [closeRelationModal, members, visibleMembers, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast, focusMemberId, findMemberNested]);
 
   const handleDeleteMember = useCallback(
     async (id: string) => {
@@ -978,7 +1000,7 @@ export default function TreeScreen() {
       <Stack.Screen 
         options={{ 
           headerShown: true,
-          title: 'Family Tree',
+          title: focusMemberId ? 'Family Subtree' : 'Family Tree',
           headerTitleAlign: 'center',
           headerLeft: () => (
             <Pressable
@@ -1042,8 +1064,24 @@ export default function TreeScreen() {
                     router.push(`/member?id=${m.id}`);
                   }}
                 >
-                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>{m.name}</ThemedText>
-                  <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: tint + '20', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                      {m.photo ? (
+                        <Image source={{ uri: m.photo }} style={{ width: '100%', height: '100%' }} />
+                      ) : (
+                        <ThemedText style={{ color: tint, fontWeight: '800', fontSize: 14 }}>{m.name.charAt(0)}</ThemedText>
+                      )}
+                    </View>
+                    <View>
+                      <ThemedText style={{ color: textColor, fontWeight: '700', fontSize: 15 }}>{m.name}</ThemedText>
+                      {(m.sex || m.dob) && (
+                        <ThemedText style={{ color: '#94a3b8', fontSize: 11, fontWeight: '600' }}>
+                          {m.sex}{m.sex && m.dob ? ' • ' : ''}{m.dob}
+                        </ThemedText>
+                      )}
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
               ))}
             </View>
@@ -1052,17 +1090,18 @@ export default function TreeScreen() {
       )}
 
       {focusMemberId && (
-        <View style={styles.focusHeader}>
+        <View style={styles.focusHeader} pointerEvents="box-none">
           <View style={[styles.focusPill, { backgroundColor: tint }]}>
             <Ionicons name="git-network-outline" size={16} color="#fff" />
             <ThemedText style={styles.focusPillText}>
-              {findMemberNested(members, focusMemberId)?.name}&apos;s Family Tree
+              {findMemberNested(members, focusMemberId)?.name}&apos;s Family Subtree
             </ThemedText>
             <Pressable 
               onPress={() => { setFocusMemberId(null); setTimeout(() => handleResetZoomPan(), 100); }}
               style={styles.focusCloseBtn}
             >
-              <Ionicons name="close-circle" size={20} color="#fff" />
+              <ThemedText style={{ color: '#fff', fontWeight: '900', marginRight: 4, fontSize: 8 }}>Done</ThemedText>
+              <Ionicons name="close-circle" size={10} color="#fff" />
             </Pressable>
           </View>
         </View>
@@ -1070,6 +1109,7 @@ export default function TreeScreen() {
 
       <View 
         style={{ flex: 1 }} 
+        pointerEvents="box-none"
         onLayout={(e) => {
           const { width, height } = e.nativeEvent.layout;
           if (width > 0 && height > 0) {
@@ -1225,7 +1265,10 @@ export default function TreeScreen() {
             <Pressable style={StyleSheet.absoluteFill} onPress={closeRelationModal} />
             <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
               <ThemedText style={[styles.modalTitle, { color: textColor }]}>
-                Add {relationModal.type}
+                Add {relationModal.type || ''}
+              </ThemedText>
+              <ThemedText style={[styles.modalSubtitle, { color: textColor }]}>
+                Choose an existing member or create a new one to add as a {(relationModal.type || '').toLowerCase()} to the subtree.
               </ThemedText>
 
               <View style={[styles.toggleContainer, { borderColor: borderColor }]}
@@ -1296,26 +1339,76 @@ export default function TreeScreen() {
                   </View>
                 </View>
               ) : (
-                <ScrollView style={styles.memberList}>
-                  {visibleMembers
-                    .filter((m) => m.id !== relationModal.sourceId)
-                    .map((m) => (
-                      <Pressable
-                        key={m.id}
-                        onPress={() => setTargetId(m.id)}
-                        style={[
-                          styles.memberRow,
-                          { borderColor: borderColor },
-                          targetId === m.id && { backgroundColor: tint + '10', borderColor: tint },
-                        ]}
-                      >
-                        <ThemedText style={{ color: textColor, fontWeight: '600' }}>{m.name}</ThemedText>
-                        {targetId === m.id && (
-                          <ThemedText style={{ color: tint, fontWeight: '800' }}>✓</ThemedText>
-                        )}
+                <View style={{ flex: 1 }}>
+                  <View style={[styles.searchContainer, { marginBottom: 12, marginHorizontal: 0, backgroundColor: bgColor, borderColor: borderColor }]}>
+                    <Ionicons name="search" size={18} color="#94a3b8" />
+                    <TextInput
+                      placeholder="Search existing members..."
+                      placeholderTextColor="#94a3b8"
+                      value={relationSearchQuery}
+                      onChangeText={setRelationSearchQuery}
+                      style={[styles.searchInput, { color: textColor }]}
+                    />
+                    {relationSearchQuery.length > 0 && (
+                      <Pressable onPress={() => setRelationSearchQuery('')}>
+                        <Ionicons name="close-circle" size={18} color="#94a3b8" />
                       </Pressable>
-                    ))}
-                </ScrollView>
+                    )}
+                  </View>
+                  
+                  <ScrollView style={styles.memberList}>
+                    {(() => {
+                      const allMembers: Member[] = [];
+                      const flatten = (list: Member[]) => {
+                        list.forEach(m => {
+                          allMembers.push(m);
+                          if (m.subTree) flatten(m.subTree);
+                        });
+                      };
+                      flatten(members);
+                      
+                      const query = relationSearchQuery.toLowerCase().trim();
+                      
+                      return allMembers
+                        .filter((m) => m.id !== relationModal.sourceId)
+                        .filter((m) => !query || m.name.toLowerCase().includes(query))
+                        .map((m) => (
+                          <Pressable
+                            key={m.id}
+                            onPress={() => setTargetId(m.id)}
+                            style={[
+                              styles.memberRow,
+                              { borderColor: borderColor, paddingVertical: 8 },
+                              targetId === m.id && { backgroundColor: tint + '15', borderColor: tint },
+                            ]}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: tint + '20', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                                {m.photo ? (
+                                  <Image source={{ uri: m.photo }} style={{ width: '100%', height: '100%' }} />
+                                ) : (
+                                  <ThemedText style={{ color: tint, fontWeight: '800', fontSize: 14 }}>{m.name.charAt(0)}</ThemedText>
+                                )}
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <ThemedText style={{ color: textColor, fontWeight: '600', fontSize: 15 }}>{m.name}</ThemedText>
+                                {(m.sex || m.dob) && (
+                                  <ThemedText style={{ color: '#94a3b8', fontSize: 11 }}>
+                                    {m.sex}{m.sex && m.dob ? ' • ' : ''}{m.dob}
+                                  </ThemedText>
+                                )}
+                              </View>
+                            </View>
+                            {targetId === m.id && (
+                              <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: tint, justifyContent: 'center', alignItems: 'center' }}>
+                                <Ionicons name="checkmark" size={16} color="#fff" />
+                              </View>
+                            )}
+                          </Pressable>
+                        ));
+                    })()}
+                  </ScrollView>
+                </View>
               )}
 
               <View style={styles.modalButtons}>
@@ -1336,7 +1429,7 @@ export default function TreeScreen() {
           <View style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.6)' }]}>
             <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
               <ThemedText style={[styles.modalTitle, { color: textColor }]}>Select DOB</ThemedText>
-              <View style={{ height: 200, overflow: 'hidden' }}>
+              <View style={{ height: 180, overflow: 'hidden' }}>
                 <DateTimePicker
                   value={tempDob}
                   mode="date"
@@ -1345,7 +1438,7 @@ export default function TreeScreen() {
                   maximumDate={new Date()}
                 />
               </View>
-              <View style={[styles.modalButtons, { marginTop: 20 }]}>
+              <View style={[styles.modalButtons, { marginTop: 12 }]}>
                 <Pressable 
                   onPress={() => setShowDobPicker(false)} 
                   style={[styles.modalBtn, { borderColor: borderColor, borderWidth: 1, minWidth: 80 }]}
@@ -1371,7 +1464,7 @@ export default function TreeScreen() {
           <View style={styles.overlay}>
             <Pressable style={StyleSheet.absoluteFill} onPress={closeExport} />
             <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
-              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Export Family Data</ThemedText>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Export Family Tree</ThemedText>
               
               {Platform.OS === 'web' && (
                 <Pressable 
@@ -1390,7 +1483,7 @@ export default function TreeScreen() {
 
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                 <View style={{ flex: 1, height: 1, backgroundColor: borderColor, opacity: 0.3 }} />
-                <ThemedText style={{ fontSize: 12, color: '#94a3b8', fontWeight: '700' }}>JSON DATA</ThemedText>
+                <ThemedText style={{ fontSize: 12, color: '#94a3b8', fontWeight: '700' }}>TREE JSON</ThemedText>
                 <View style={{ flex: 1, height: 1, backgroundColor: borderColor, opacity: 0.3 }} />
               </View>
 
@@ -1424,7 +1517,7 @@ export default function TreeScreen() {
           <View style={styles.overlay}>
             <Pressable style={StyleSheet.absoluteFill} onPress={closeImport} />
             <View style={[styles.modalCard, { backgroundColor: cardColor, borderColor: borderColor }]}>
-              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Import Family Data</ThemedText>
+              <ThemedText style={[styles.modalTitle, { color: textColor }]}>Import Family Subtree</ThemedText>
               
               <Pressable 
                 onPress={() => { closeImport(); void importFromFile(); }}
@@ -1441,26 +1534,26 @@ export default function TreeScreen() {
 
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                 <View style={{ flex: 1, height: 1, backgroundColor: borderColor, opacity: 0.3 }} />
-                <ThemedText style={{ fontSize: 12, color: '#94a3b8', fontWeight: '700' }}>OR PASTE JSON</ThemedText>
+                <ThemedText style={{ fontSize: 12, color: '#94a3b8', fontWeight: '700' }}>OR PASTE SUBTREE JSON</ThemedText>
                 <View style={{ flex: 1, height: 1, backgroundColor: borderColor, opacity: 0.3 }} />
               </View>
 
-              <ScrollView style={{ maxHeight: 200, marginBottom: 12 }}>
-                <TextInput
-                  value={importText}
-                  onChangeText={setImportText}
-                  multiline
-                  placeholder="Paste JSON here..."
-                  placeholderTextColor="#94a3b8"
-                  style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor, minHeight: 100 }]}
-                />
-              </ScrollView>
+                  <ScrollView style={{ maxHeight: 200, marginBottom: 12 }}>
+                    <TextInput
+                      value={importText}
+                      onChangeText={setImportText}
+                      multiline
+                      placeholder="Paste subtree JSON here..."
+                      placeholderTextColor="#94a3b8"
+                      style={[styles.jsonBox, { backgroundColor: bgColor, borderColor: borderColor, color: textColor, minHeight: 100 }]}
+                    />
+                  </ScrollView>
               <View style={styles.modalButtons}>
                 <Pressable onPress={closeImport} style={[styles.modalBtn, { borderColor: borderColor }]}>
                   <ThemedText style={{ color: textColor, fontWeight: '700' }}>Cancel</ThemedText>
                 </Pressable>
                 <Pressable onPress={handleImport} style={[styles.modalBtn, { backgroundColor: tint, borderColor: tint }]}>
-                  <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Import JSON</ThemedText>
+                  <ThemedText style={{ color: '#fff', fontWeight: '700' }}>Import Tree</ThemedText>
                 </Pressable>
               </View>
             </View>
@@ -1537,7 +1630,7 @@ export default function TreeScreen() {
                     <View style={[styles.settingsIcon, { backgroundColor: '#3b82f615' }]}>
                       <Ionicons name="share-outline" size={20} color="#3b82f6" />
                     </View>
-                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Export Family Data</ThemedText>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Export Family Tree</ThemedText>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
@@ -1550,7 +1643,7 @@ export default function TreeScreen() {
                     <View style={[styles.settingsIcon, { backgroundColor: '#10b98115' }]}>
                       <Ionicons name="download-outline" size={20} color="#10b981" />
                     </View>
-                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Import Family Data</ThemedText>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Import Family Tree</ThemedText>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
@@ -1564,14 +1657,14 @@ export default function TreeScreen() {
                 onPress={() => { handleReset(); setLeftTrayOpen(false); }}
                 style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
               >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
-                    <Ionicons name="refresh-outline" size={20} color="#ef4444" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
+                      <Ionicons name="refresh-outline" size={20} color="#ef4444" />
+                    </View>
+                    <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Reset All Subtrees</ThemedText>
                   </View>
-                  <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Reset All Data</ThemedText>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </Pressable>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
             </View>
           </View>
 
@@ -1635,13 +1728,13 @@ export default function TreeScreen() {
                   <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
                     <Ionicons name="git-network-outline" size={20} color="#5856D6" />
                   </View>
-                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>Open {selectedMember.name.split(' ')[0]}&apos;s Family Tree</ThemedText>
+                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>Open {selectedMember.name.split(' ')[0]}&apos;s Family Subtree</ThemedText>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
               </Pressable>
 
               <View>
-                <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Relations</ThemedText>
+                <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Subtree</ThemedText>
                 {selectedMember.relations && selectedMember.relations.length > 0 ? (
                   <View style={{ gap: 10 }}>
                     {selectedMember.relations.map((rel, idx) => {
@@ -1687,46 +1780,50 @@ export default function TreeScreen() {
 
 const styles = StyleSheet.create({
   headerPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 999,
-    borderWidth: 1,
+    borderWidth: 1.5,
+    elevation: 4,
   },
   headerPillText: {
     color: '#fff',
-    fontWeight: '800',
-    fontSize: 12,
+    fontWeight: '900',
+    fontSize: 13,
+    letterSpacing: -0.2,
   },
   iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   searchContainer: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
     borderBottomWidth: 1,
     zIndex: 20,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 40,
-    borderRadius: 10,
-    borderWidth: 1,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
   },
   searchInput: {
     flex: 1,
-    paddingHorizontal: 10,
-    fontSize: 14,
+    paddingHorizontal: 12,
+    fontSize: 11,
+    fontWeight: '500',
   },
   profileBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 24,
+    height: 24,
+    borderRadius: 4,
     borderWidth: 2,
     overflow: 'hidden',
     alignItems: 'center',
@@ -1744,74 +1841,73 @@ const styles = StyleSheet.create({
   },
   doneBtn: {
     position: 'absolute',
-    top: 12,
-    right: 12,
+    bottom: 12,
+    right: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
+    gap: 8,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 20,
-    zIndex: 100,
-    elevation: 5,
+    borderRadius: 32,
+    zIndex: 2000,
+    elevation: 10,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
     ...Platform.select({
-      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.2)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 }
+      web: { boxShadow: '0 15px 35px rgba(99, 102, 241, 0.5)' },
+      default: { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.5, shadowRadius: 18 }
     }),
   },
   doneBtnText: {
     color: '#fff',
-    fontWeight: '800',
-    fontSize: 14,
+    fontWeight: '900',
+    fontSize: 11,
+    letterSpacing: -0.3,
   },
   settingsItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
+    padding: 6,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    marginBottom: 12,
   },
   settingsIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 24,
+    height: 24,
+    borderRadius: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
   categoryTitle: {
-    fontSize: 12,
+    fontSize: 8,
     fontWeight: '800',
     color: '#94a3b8',
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: 12,
+    marginBottom: 4,
     marginLeft: 4,
   },
   searchResults: {
     position: 'absolute',
-    top: 48,
-    left: 12,
-    right: 12,
-    borderRadius: 10,
-    borderWidth: 1,
+    top: 72,
+    left: 16,
+    right: 16,
+    borderRadius: 20,
+    borderWidth: 1.5,
     zIndex: 100,
     ...Platform.select({
-      web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.1)' },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.1,
-        shadowOffset: { width: 0, height: 4 },
-        shadowRadius: 8,
-        elevation: 5,
-      }
+      web: { boxShadow: '0 15px 35px rgba(0,0,0,0.15)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 15, elevation: 10 }
     }),
   },
   searchResultItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     borderBottomWidth: 1,
   },
   inlineLeft: { flexDirection: 'row', gap: 6, alignItems: 'center' },
@@ -1825,27 +1921,38 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     width: '100%',
-    maxWidth: 420,
-    borderRadius: 18,
-    borderWidth: 1,
+    maxWidth: 380,
+    borderRadius: 28,
+    borderWidth: 1.5,
     padding: 16,
+    ...Platform.select({
+      web: { boxShadow: '0 20px 50px rgba(0,0,0,0.2)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 15 }, shadowOpacity: 0.25, shadowRadius: 25 }
+    }),
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    marginBottom: 12,
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 4,
+    letterSpacing: -0.5,
+  },
+  modalSubtitle: {
+    fontSize: 11,
+    opacity: 0.6,
+    marginBottom: 10,
+    lineHeight: 12,
   },
   toggleContainer: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderRadius: 12,
+    borderWidth: 1.5,
+    borderRadius: 14,
     padding: 4,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   toggle: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingVertical: 8,
+    borderRadius: 10,
     alignItems: 'center',
   },
   toggleText: {
@@ -1854,47 +1961,49 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   input: {
-    borderWidth: 1,
-    borderRadius: 12,
+    borderWidth: 1.5,
+    borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 16,
-    marginBottom: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 16,
   },
   dateInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 12,
-    marginBottom: 12,
+    borderWidth: 1.5,
+    borderRadius: 14,
+    marginBottom: 16,
     paddingRight: 12,
   },
   dateInput: {
     flex: 1,
-    padding: 12,
-    fontSize: 16,
+    padding: 8,
+    fontSize: 14,
   },
   calendarIcon: {
     padding: 4,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 8,
-    opacity: 0.7,
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748b',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   sexRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   sexChip: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: 1.5,
     alignItems: 'center',
-    borderColor: '#e2e8f0',
+    borderColor: '#f1f5f9',
   },
   sexChipText: {
     fontSize: 14,
@@ -1902,41 +2011,64 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   memberList: {
-    maxHeight: 220,
+    maxHeight: 140,
     marginBottom: 12,
   },
   memberRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 12,
+    borderWidth: 1.5,
+    borderRadius: 16,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 8,
+    paddingVertical: 10,
+    marginBottom: 10,
+    ...Platform.select({
+      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.05)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 }
+    }),
   },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 4,
+    marginTop: 8,
   },
   modalBtn: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
+    minWidth: 80,
+    alignItems: 'center',
   },
   jsonBox: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 13,
-    lineHeight: 18,
-    minHeight: 200,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    fontSize: 10,
+    lineHeight: 12,
+    minHeight: 120,
     textAlignVertical: 'top',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  toast: { position: 'absolute', left: 16, right: 16, bottom: 20, alignItems: 'center', paddingVertical: 12, borderRadius: 12, zIndex: 200, elevation: 10 },
+  toast: { 
+    position: 'absolute', 
+    left: 24, 
+    right: 24, 
+    bottom: 40, 
+    alignItems: 'center', 
+    paddingVertical: 6, 
+    paddingHorizontal: 24,
+    borderRadius: 20, 
+    zIndex: 200, 
+    elevation: 10,
+    ...Platform.select({
+      web: { boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 12 }
+    }),
+  },
   focusHeader: {
     position: 'absolute',
     top: 12,
@@ -1948,23 +2080,31 @@ const styles = StyleSheet.create({
   focusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 25,
-    gap: 10,
-    elevation: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 30,
+    gap: 4,
+    elevation: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
     ...Platform.select({
-      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.15)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 }
+      web: { boxShadow: '0 12px 30px rgba(99, 102, 241, 0.4)' },
+      default: { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.4, shadowRadius: 15 }
     }),
   },
   focusPillText: {
     color: '#fff',
     fontWeight: '800',
-    fontSize: 14,
+    fontSize: 10,
+    letterSpacing: -0.3,
   },
   focusCloseBtn: {
-    marginLeft: 4,
-    padding: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+    borderRadius: 16,
+    marginLeft: 2,
   },
 });
