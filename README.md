@@ -1,10 +1,10 @@
-# Family Tree App
+# Family Subtree App
 
-A React Native app built with Expo Router and TypeScript for creating and managing family trees. Visualize family relationships, add members and relations, export/import data, and more.
+A React Native app built with Expo Router and TypeScript for creating and managing family subtrees. Visualize family relationships, add members and relations, export/import data, and more.
 
 ## Features
 
-- **Family Tree Visualization**: Interactive tree view with nodes representing family members and edges showing relationships.
+- **Family Subtree Visualization**: Interactive tree view with nodes representing family members and edges showing relationships.
 - **Member Management**: Add, edit, and delete family members with profiles including name, date of birth, email, and photos.
 - **Relationships**: Add parent, child, spouse, sibling, and partner relations between members.
 - **Edit Mode**: Toggle edit mode to delete members directly from the tree view.

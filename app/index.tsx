@@ -123,7 +123,7 @@ export default function Index() {
         await FamilyService.saveFamily(Array.isArray(data) ? data : data.members);
         router.replace('/tree');
       } else {
-        Alert.alert('Error', 'Invalid family tree file');
+        Alert.alert('Error', 'Invalid family subtree file');
       }
     } catch (err) {
       console.error('Import failed', err);
@@ -167,30 +167,64 @@ export default function Index() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24 },
+  container: { flex: 1, justifyContent: 'center', padding: 32 },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  content: { alignItems: 'center' },
-  iconContainer: { marginBottom: 24 },
-  title: { fontSize: 28, fontWeight: '800', textAlign: 'center', marginBottom: 12 },
-  subtitle: { fontSize: 16, textAlign: 'center', opacity: 0.7, marginBottom: 40, lineHeight: 24 },
+  content: { 
+    alignItems: 'center',
+    padding: 32,
+    borderRadius: 32,
+    ...Platform.select({
+      web: { boxShadow: '0 20px 50px rgba(0,0,0,0.05)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.05, shadowRadius: 20, elevation: 5 }
+    }),
+  },
+  iconContainer: { 
+    marginBottom: 32,
+    width: 120,
+    height: 120,
+    borderRadius: 30,
+    backgroundColor: '#6366f110',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  title: { 
+    fontSize: 32, 
+    fontWeight: '900', 
+    textAlign: 'center', 
+    marginBottom: 12,
+    letterSpacing: -1,
+  },
+  subtitle: { 
+    fontSize: 17, 
+    textAlign: 'center', 
+    opacity: 0.6, 
+    marginBottom: 48, 
+    lineHeight: 26,
+    letterSpacing: -0.2,
+  },
   buttonContainer: { width: '100%', gap: 16 },
   button: { 
     flexDirection: 'row', 
     alignItems: 'center', 
     justifyContent: 'center', 
-    padding: 16, 
-    borderRadius: 16, 
-    gap: 8 
+    padding: 18, 
+    borderRadius: 20, 
+    gap: 12,
+    elevation: 8,
+    ...Platform.select({
+      web: { boxShadow: '0 10px 25px rgba(99, 102, 241, 0.3)' },
+      default: { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 12 }
+    }),
   },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  buttonText: { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: -0.5 },
   buttonSecondary: { 
     flexDirection: 'row', 
     alignItems: 'center', 
     justifyContent: 'center', 
-    padding: 16, 
-    borderRadius: 16, 
+    padding: 18, 
+    borderRadius: 20, 
     borderWidth: 2, 
-    gap: 8 
+    gap: 12 
   },
-  buttonSecondaryText: { fontSize: 16, fontWeight: '700' },
+  buttonSecondaryText: { fontSize: 18, fontWeight: '800', letterSpacing: -0.5 },
 });

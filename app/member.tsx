@@ -9,7 +9,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -78,7 +78,7 @@ export default function MemberScreen() {
     return age >= 0 ? age : undefined;
   };
 
-  const findMemberNested = (list: Member[], targetId: string): Member | undefined => {
+  const findMemberNested = useCallback((list: Member[], targetId: string): Member | undefined => {
     for (const m of list) {
       if (m.id === targetId) return m;
       if (m.subTree) {
@@ -87,7 +87,7 @@ export default function MemberScreen() {
       }
     }
     return undefined;
-  };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -101,7 +101,7 @@ export default function MemberScreen() {
         setIsPinned(pinnedId === found.id);
       }
     })();
-  }, [id]);
+  }, [id, findMemberNested]);
 
   useEffect(() => {
     if (member) {
@@ -671,7 +671,7 @@ export default function MemberScreen() {
           {activeTab === 'family' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <ThemedText style={styles.sectionTitle}>Relationships</ThemedText>
+                <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
                 <Pressable style={[styles.addButton, { backgroundColor: tint }]} onPress={() => setAdding(true)}>
                   <ThemedText style={styles.addButtonText}>+ Add</ThemedText>
                 </Pressable>
@@ -725,7 +725,7 @@ export default function MemberScreen() {
 
           {activeTab === 'insights' && (
             <View style={styles.section}>
-              <ThemedText style={styles.sectionTitle}>Family Insights</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
               <View style={styles.insightsGrid}>
                 <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
                   <Ionicons name="people-outline" size={24} color={tint} />
@@ -915,125 +915,125 @@ export default function MemberScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
-  header: { alignItems: 'center', marginBottom: 24, position: 'relative' },
+  header: { alignItems: 'center', marginBottom: 16, position: 'relative' },
   headerCover: { position: 'absolute', top: -100, left: -100, right: -100, height: 240, opacity: 0.5 },
   avatarLarge: { 
-    width: 120, 
-    height: 120, 
-    borderRadius: 60, 
-    borderWidth: 4, 
+    width: 110, 
+    height: 110, 
+    borderRadius: 24, 
+    borderWidth: 3, 
     alignItems: 'center', 
     justifyContent: 'center', 
     overflow: 'visible', 
-    marginTop: 40, 
-    marginBottom: 16, 
+    marginTop: 20, 
+    marginBottom: 12, 
     ...Platform.select({
-      web: { boxShadow: '0 4px 8px rgba(0,0,0,0.1)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 }
+      web: { boxShadow: '0 8px 20px rgba(0,0,0,0.12)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 12 }
     }),
-    elevation: 5 
+    elevation: 8 
   },
-  avatarImg: { width: '100%', height: '100%', borderRadius: 60 },
-  editPhotoBadge: { position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#fff' },
-  profileName: { fontSize: 28, fontWeight: '900', letterSpacing: -0.5 },
-  nameInput: { fontSize: 24, fontWeight: '800', borderBottomWidth: 2, paddingVertical: 0, minWidth: 150, textAlign: 'center' },
-  pinToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, marginTop: 12, marginBottom: 4 },
-  pinToggleText: { fontSize: 12, fontWeight: '700' },
-  profileDob: { fontSize: 14, color: '#64748b', marginTop: 4 },
+  avatarImg: { width: '100%', height: '100%', borderRadius: 20 },
+  editPhotoBadge: { position: 'absolute', bottom: -2, right: -2, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff', elevation: 4 },
+  profileName: { fontSize: 24, fontWeight: '900', letterSpacing: -0.5 },
+  nameInput: { fontSize: 22, fontWeight: '900', borderBottomWidth: 2, paddingVertical: 0, minWidth: 180, textAlign: 'center', letterSpacing: -0.3 },
+  pinToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, marginTop: 12, marginBottom: 4 },
+  pinToggleText: { fontSize: 12, fontWeight: '800' },
+  profileDob: { fontSize: 13, color: '#64748b', marginTop: 4, fontWeight: '500' },
   
-  tabBar: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  tab: { paddingVertical: 12, borderBottomWidth: 3, borderBottomColor: 'transparent', alignItems: 'center' },
-  tabText: { fontSize: 15, fontWeight: '600', color: '#94a3b8' },
+  tabBar: { flexDirection: 'row', paddingHorizontal: 16, marginBottom: 16, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  tab: { paddingVertical: 10, borderBottomWidth: 3, borderBottomColor: 'transparent', alignItems: 'center', flex: 1 },
+  tabText: { fontSize: 13, fontWeight: '800', color: '#94a3b8', letterSpacing: -0.1 },
 
-  section: { paddingHorizontal: 20, marginBottom: 32 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  sectionTitle: { fontSize: 20, fontWeight: '800', letterSpacing: -0.3 },
+  section: { paddingHorizontal: 16, marginBottom: 24 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontWeight: '900', letterSpacing: -0.3 },
   infoCard: { 
-    borderWidth: 1, 
-    borderRadius: 20, 
-    padding: 20, 
+    borderWidth: 1.5, 
+    borderRadius: 16, 
+    padding: 16, 
     ...Platform.select({
-      web: { boxShadow: '0 2px 10px rgba(0,0,0,0.05)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10 }
+      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.04)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 8 }
     }),
     elevation: 2 
   },
   
-  quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
-  quickActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1 },
-  quickActionText: { fontSize: 13, fontWeight: '700', textTransform: 'capitalize' },
+  quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  quickActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1.5 },
+  quickActionText: { fontSize: 12, fontWeight: '800', textTransform: 'capitalize' },
 
-  addButton: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
-  addButtonText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  addButton: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
+  addButtonText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   
   relationCard: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    padding: 14, 
-    borderRadius: 18, 
-    borderWidth: 1, 
-    marginBottom: 12, 
+    padding: 12, 
+    borderRadius: 14, 
+    borderWidth: 1.5, 
+    marginBottom: 10, 
     ...Platform.select({
-      web: { boxShadow: '0 2px 5px rgba(0,0,0,0.03)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 5 }
+      web: { boxShadow: '0 2px 6px rgba(0,0,0,0.02)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.02, shadowRadius: 4 }
     }),
     elevation: 1 
   },
-  avatarSmall: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginRight: 14 },
+  avatarSmall: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginRight: 12 },
   relationInfo: { flex: 1 },
-  relationName: { fontSize: 17, fontWeight: '700' },
-  relationType: { fontSize: 13, color: '#64748b', textTransform: 'capitalize', marginTop: 2 },
+  relationName: { fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
+  relationType: { fontSize: 12, color: '#64748b', textTransform: 'capitalize', marginTop: 1, fontWeight: '500' },
   relationActions: { flexDirection: 'row', gap: 4 },
   actionBtn: { padding: 8, borderRadius: 10 },
   
-  insightsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  insightCard: { width: '48%', padding: 16, borderRadius: 20, borderWidth: 1, alignItems: 'flex-start', gap: 8 },
-  summaryLabel: { fontSize: 12, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 },
-  summaryValue: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  insightsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  insightCard: { width: '48%', padding: 14, borderRadius: 16, borderWidth: 1.5, alignItems: 'flex-start', gap: 8 },
+  summaryLabel: { fontSize: 11, fontWeight: '900', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryValue: { fontSize: 13, fontWeight: '700', lineHeight: 18 },
 
-  emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 20, fontStyle: 'italic' },
-  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: 'rgba(0,0,0,0.5)' },
+  emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 16, fontStyle: 'italic', fontSize: 13 },
+  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 16, backgroundColor: 'rgba(0,0,0,0.6)' },
   modalContent: { 
     width: '100%', 
-    maxWidth: 400, 
-    borderRadius: 24, 
-    padding: 24, 
+    maxWidth: 380, 
+    borderRadius: 20, 
+    padding: 20, 
     ...Platform.select({
-      web: { boxShadow: '0 10px 20px rgba(0,0,0,0.3)' },
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20 }
+      web: { boxShadow: '0 15px 40px rgba(0,0,0,0.25)' },
+      default: { shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.25, shadowRadius: 20 }
     }),
-    elevation: 10 
+    elevation: 12 
   },
-  modalTitle: { fontSize: 20, fontWeight: '800', marginBottom: 20 },
-  label: { fontSize: 14, fontWeight: '600', color: '#64748b', marginBottom: 8 },
+  modalTitle: { fontSize: 18, fontWeight: '900', marginBottom: 16, letterSpacing: -0.3 },
+  label: { fontSize: 11, fontWeight: '800', color: '#64748b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   chipScroll: { flexDirection: 'row', marginBottom: 16 },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, marginRight: 8 },
-  chipText: { fontSize: 12, fontWeight: '600' },
+  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1.5, marginRight: 8 },
+  chipText: { fontSize: 12, fontWeight: '800' },
   sexRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  sexChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0' },
-  sexChipText: { fontSize: 14, fontWeight: '700', color: '#475569' },
-  toggleContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 12, padding: 4, marginBottom: 16 },
-  toggle: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
-  toggleText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
-  input: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 16 },
+  sexChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1.5, borderColor: '#f1f5f9' },
+  sexChipText: { fontSize: 13, fontWeight: '800', color: '#475569' },
+  toggleContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 12, padding: 3, marginBottom: 16 },
+  toggle: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 10 },
+  toggleText: { fontSize: 12, fontWeight: '800', color: '#64748b' },
+  input: { borderWidth: 1.5, borderRadius: 12, padding: 12, marginBottom: 16, fontSize: 14 },
   dateInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderRadius: 12,
     marginBottom: 16,
-    paddingRight: 12,
+    paddingRight: 10,
   },
   dateInput: {
     flex: 1,
     padding: 12,
-    fontSize: 16,
+    fontSize: 14,
   },
   notesInput: {
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderRadius: 12,
     padding: 12,
-    fontSize: 16,
+    fontSize: 14,
     minHeight: 100,
     textAlignVertical: 'top',
     marginBottom: 16,
@@ -1041,10 +1041,10 @@ const styles = StyleSheet.create({
   calendarIcon: {
     padding: 4,
   },
-  metaText: { fontSize: 14, color: '#64748b', marginBottom: 12 },
+  metaText: { fontSize: 13, color: '#64748b', marginBottom: 12, fontWeight: '500' },
   saveBtn: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12 },
   memberList: { maxHeight: 200, marginBottom: 16 },
   memberRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
+  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 4 },
   modalBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
 });
