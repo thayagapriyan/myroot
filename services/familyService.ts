@@ -1,4 +1,4 @@
-import { Member } from '@/types/Family';
+import { Member } from '@/types/family';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const FAMILY_KEY = 'local:family';

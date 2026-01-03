@@ -1,15 +1,20 @@
-import { Member, TreeLayout } from '@/types/Family';
+import { Member, TreeLayout } from '@/types/family';
 
-export function calculateTreeLayout(members: Member[], screenWidth: number): TreeLayout {
+export function calculateTreeLayout(members: Member[], screenWidth: number, focusId?: string | null): TreeLayout {
   const map = new Map<string, Member>();
   members.forEach((m) => map.set(m.id, m));
 
   // Build adjacency for children (parent -> [children])
   const children = new Map<string, string[]>();
   const parentChildNodes = new Set<string>();
+  const allIds = new Set(members.map((m) => m.id));
+
   members.forEach((m) => {
     const rels = m.relations || [];
     rels.forEach((r) => {
+      // Only consider relations where the target is also visible in the current view
+      if (!allIds.has(r.targetId)) return;
+
       if (r.type === 'parent') {
         // targetId is parent of m
         const arr = children.get(r.targetId) || [];
@@ -30,10 +35,15 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
   });
 
   // Find roots: nodes not child of anyone
-  const allIds = new Set(members.map((m) => m.id));
   const childSet = new Set<string>();
   children.forEach((vals) => vals.forEach((id) => childSet.add(id)));
-  const roots = Array.from(allIds).filter((id) => !childSet.has(id));
+  let roots = Array.from(allIds).filter((id) => !childSet.has(id));
+  
+  // If we have a focusId, ensure it is treated as a primary root if it has no parents in the current set
+  if (focusId && roots.includes(focusId)) {
+    roots = [focusId, ...roots.filter(id => id !== focusId)];
+  }
+
   if (roots.length === 0 && members.length > 0) roots.push(members[0].id);
 
   // Build spouse/partner adjacency (undirected)
@@ -47,6 +57,7 @@ export function calculateTreeLayout(members: Member[], screenWidth: number): Tre
   };
   members.forEach((m) => {
     (m.relations || []).forEach((r: any) => {
+      if (!allIds.has(r.targetId)) return;
       if (r.type === 'spouse' || r.type === 'partner') addSpouseEdge(m.id, r.targetId);
     });
   });

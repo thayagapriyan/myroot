@@ -15,6 +15,7 @@ export interface Member {
   age?: number;
   photo?: string;
   notes?: string;
+  subTree?: Member[]; // Nested structure to isolate spouse families
   relations?: Relation[];
 }
 
