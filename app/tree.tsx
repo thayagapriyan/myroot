@@ -1,9 +1,9 @@
 import { SideTray } from '@/components/SideTray';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { MiniMap } from '@/components/tree/MiniMap';
 import { TreeNode } from '@/components/tree/TreeNode';
 import { ZoomPanContainer } from '@/components/ZoomPanContainer';
+import { Layout } from '@/constants/theme';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
 import { Member } from '@/types/family';
@@ -55,11 +55,13 @@ export default function TreeScreen() {
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
 
-  const findMemberNested = useCallback((list: Member[], id: string): Member | undefined => {
+  const findMemberNested = useCallback((list: Member[], id: string, visited = new Set<string>()): Member | undefined => {
     for (const m of list) {
       if (m.id === id) return m;
+      if (visited.has(m.id)) continue;
+      visited.add(m.id);
       if (m.subTree) {
-        const found = findMemberNested(m.subTree, id);
+        const found = findMemberNested(m.subTree, id, visited);
         if (found) return found;
       }
     }
@@ -88,13 +90,15 @@ export default function TreeScreen() {
     if (!spouse) return [];
     
     const flattened: Member[] = [spouse];
-    const collect = (list: Member[]) => {
+    const collect = (list: Member[], visited = new Set<string>()) => {
       list.forEach(m => {
+        if (visited.has(m.id)) return;
+        visited.add(m.id);
         flattened.push(m);
-        if (m.subTree) collect(m.subTree);
+        if (m.subTree) collect(m.subTree, visited);
       });
     };
-    if (spouse.subTree) collect(spouse.subTree);
+    if (spouse.subTree) collect(spouse.subTree, new Set([spouse.id]));
     
     // Remove duplicates just in case
     const seen = new Set<string>();
@@ -108,7 +112,7 @@ export default function TreeScreen() {
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
     sourceId: string | null;
-    type: 'child' | 'spouse' | 'sibling' | 'parent' | null;
+    type: 'child' | 'spouse' | 'sibling' | 'parent' | 'partner' | null;
   }>({ open: false, sourceId: null, type: null });
   const [useNewTarget, setUseNewTarget] = useState(true);
   const [newTargetName, setNewTargetName] = useState('');
@@ -123,8 +127,9 @@ export default function TreeScreen() {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [currentZoom, setCurrentZoom] = useState(1);
-  const [currentTranslateX, setCurrentTranslateX] = useState(0);
-  const [currentTranslateY, setCurrentTranslateY] = useState(0);
+  const [currentTransform, setCurrentTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const [viewportBounds, setViewportBounds] = useState({ x: 0, y: 0, width: SCREEN_W, height: SCREEN_H });
+  const [visibleNodeIds, setVisibleNodeIds] = useState<Set<string>>(new Set());
   const [containerDims, setContainerDims] = useState({ width: SCREEN_W, height: SCREEN_H - 240 });
   const [toast, setToast] = useState<string | null>(null);
   const toastsRef = useRef<string[]>([]);
@@ -211,7 +216,12 @@ export default function TreeScreen() {
   const loadMembers = useCallback(async () => {
     const list = await FamilyService.getFamily();
     const ensured = await ensureDefaultMember(list);
-    setMembers(ensured);
+    
+    // Only update if data actually changed to prevent layout recalculation loops
+    setMembers(prev => {
+      if (JSON.stringify(prev) === JSON.stringify(ensured)) return prev;
+      return ensured;
+    });
     
     const pinnedId = await FamilyService.getPinnedMemberId();
     setPinnedMemberId(pinnedId);
@@ -668,9 +678,9 @@ export default function TreeScreen() {
 
   const { positions, edges, spouseEdges } = layout;
 
-  const { centeredPositions, contentWidth, contentHeight } = useMemo(() => {
-    const nodeW = 140;
-    const nodeH = 100;
+  const { centeredPositions, contentWidth, contentHeight, virtualWidth, virtualHeight } = useMemo(() => {
+    const nodeW = Layout.nodeWidth;
+    const nodeH = Layout.nodeHeight;
     const pad = 200; // Reduced padding to keep tree closer to start
     const pts = Object.values(positions);
     if (!pts.length) {
@@ -684,10 +694,13 @@ export default function TreeScreen() {
     const layoutWidth = isFinite(maxX - minX) ? maxX - minX + nodeW : SCREEN_W;
     const layoutHeight = isFinite(maxY - minY) ? maxY - minY + nodeH : 800;
     
-    // Content size should be exactly the layout size plus small padding
-    // Cap at 20000 to prevent crash on extreme trees
-    const width = Math.min(20000, layoutWidth + pad * 2);
-    const height = Math.min(20000, Math.max(800, layoutHeight + pad));
+    // Virtual dimensions represent the full logical tree size (unlimited)
+    const virtualWidth = layoutWidth + pad * 2;
+    const virtualHeight = Math.max(800, layoutHeight + pad);
+    
+    // Render dimensions - no longer capped at 4000px as we use individual SVGs
+    const width = Math.max(SCREEN_W, virtualWidth);
+    const height = Math.max(800, virtualHeight);
     
     // Offset to center the layout within the contentWidth
     const offsetX = isFinite(minX) ? pad - minX : pad;
@@ -697,36 +710,73 @@ export default function TreeScreen() {
     Object.entries(positions).forEach(([id, p]) => {
       shifted[id] = { x: p.x + offsetX, y: p.y + offsetY };
     });
-    return { centeredPositions: shifted, contentWidth: width, contentHeight: height };
+    return { 
+      centeredPositions: shifted, 
+      contentWidth: width, 
+      contentHeight: height,
+      // Pass virtual dimensions for proper panning bounds
+      virtualWidth,
+      virtualHeight
+    };
   }, [positions]);
 
-  const handleResetZoomPan = useCallback(() => {
-    const rootMember = focusMemberId ? findMemberNested(members, focusMemberId) : visibleMembers[0];
-    const fitZoomW = containerDims.width / contentWidth;
-    const fitZoomH = containerDims.height / contentHeight;
-    const fitZoom = Math.max(0.05, Math.min(1, fitZoomW, fitZoomH) * 0.9);
-
-    // If we have a focusMemberId, always center on them at a comfortable zoom initially
-    if (focusMemberId && rootMember && centeredPositions[rootMember.id]) {
-      const pos = centeredPositions[rootMember.id];
-      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.8);
-      setCurrentZoom(0.8);
+  // Viewport-based culling with generous buffer for smooth scrolling
+  useEffect(() => {
+    if (!centeredPositions || Object.keys(centeredPositions).length === 0) {
+      setVisibleNodeIds(new Set());
       return;
     }
+    
+    const buffer = 500; // Extra buffer around viewport
+    const visibleIds = new Set<string>();
+    
+    Object.entries(centeredPositions).forEach(([id, pos]) => {
+      const nodeRight = pos.x + Layout.nodeWidth;
+      const nodeBottom = pos.y + Layout.nodeHeight;
+      
+      // Check if node intersects with buffered viewport
+      if (nodeRight >= viewportBounds.x - buffer && 
+          pos.x <= viewportBounds.x + viewportBounds.width + buffer &&
+          nodeBottom >= viewportBounds.y - buffer && 
+          pos.y <= viewportBounds.y + viewportBounds.height + buffer) {
+        visibleIds.add(id);
+      }
+    });
+    
+    setVisibleNodeIds(visibleIds);
+  }, [centeredPositions, viewportBounds]);
 
-    // If we are already zoomed out (less than 0.4), focus back on root at 0.8x
-    if (currentZoom < 0.4 && rootMember && centeredPositions[rootMember.id]) {
-      const pos = centeredPositions[rootMember.id];
-      zoomPanContainerRef.current?.focusOn?.(pos.x + 70, pos.y + 40, 0.8);
-      setCurrentZoom(0.8);
-    } else {
-      // Otherwise fit the whole tree
-      const centerX = contentWidth / 2;
-      const centerY = contentHeight / 2;
-      zoomPanContainerRef.current?.focusOn?.(centerX, centerY, fitZoom);
-      setCurrentZoom(fitZoom);
+  // Viewport-based edge culling
+  const isEdgeVisible = useCallback((fromId: string, toId: string, parent2Id?: string) => {
+    const a = centeredPositions[fromId];
+    const b = centeredPositions[toId];
+    if (!a || !b) return false;
+    
+    const buffer = 500;
+    let minX = Math.min(a.x, b.x);
+    let maxX = Math.max(a.x, b.x) + Layout.nodeWidth;
+    let minY = Math.min(a.y, b.y);
+    let maxY = Math.max(a.y, b.y) + Layout.nodeHeight;
+    
+    if (parent2Id) {
+      const p2 = centeredPositions[parent2Id];
+      if (p2) {
+        minX = Math.min(minX, p2.x);
+        maxX = Math.max(maxX, p2.x + Layout.nodeWidth);
+      }
     }
-  }, [members, visibleMembers, focusMemberId, centeredPositions, containerDims, contentWidth, contentHeight, currentZoom, findMemberNested]);
+    
+    return (
+      maxX >= viewportBounds.x - buffer &&
+      minX <= viewportBounds.x + viewportBounds.width + buffer &&
+      maxY >= viewportBounds.y - buffer &&
+      minY <= viewportBounds.y + viewportBounds.height + buffer
+    );
+  }, [centeredPositions, viewportBounds]);
+
+  const handleResetZoomPan = useCallback(() => {
+    zoomPanContainerRef.current?.reset();
+  }, []);
 
   const edgeColors = useMemo(() => {
     const palette = ['#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#5AC8FA', '#0A84FF', '#5856D6', '#AF52DE'];
@@ -819,140 +869,196 @@ export default function TreeScreen() {
   };
 
   const saveQuickRelation = useCallback(async () => {
-    if (!relationModal.open || !relationModal.sourceId || !relationModal.type) return;
+    try {
+      if (!relationModal.open || !relationModal.sourceId || !relationModal.type) return;
 
-    const sourceId = relationModal.sourceId;
-    const type = relationModal.type;
-    
-    // Helper to perform immutable update in nested structure
-    const updateNested = (targetList: Member[], id: string, updater: (m: Member) => Member): Member[] => {
-      return targetList.map(m => {
-        if (m.id === id) {
-          return updater(m);
-        }
-        if (m.subTree) {
-          return { ...m, subTree: updateNested(m.subTree, id, updater) };
-        }
-        return m;
-      });
-    };
-
-    // Haptic on save (mobile)
-    try { 
-      if (Platform.OS !== 'web') await (await import('expo-haptics')).notificationAsync((await import('expo-haptics')).NotificationFeedbackType.Success);
-    } catch {}
-
-    const addRelationPair = (currentList: Member[], id1: string, id2: string, type1to2: string): Member[] => {
-      let next = updateNested(currentList, id1, (m1) => {
-        const relations = [...(m1.relations || [])];
-        if (!relations.find((r) => r.targetId === id2 && r.type === type1to2)) {
-          relations.push({ type: type1to2, targetId: id2 });
-        }
-        return { ...m1, relations };
-      });
-
-      next = updateNested(next, id2, (m2) => {
-        const relations = [...(m2.relations || [])];
-        const type2to1 = reciprocal(type1to2);
-        if (!relations.find((r) => r.targetId === id1 && r.type === type2to1)) {
-          relations.push({ type: type2to1, targetId: id1 });
-        }
-        return { ...m2, relations };
-      });
+      const sourceId = relationModal.sourceId;
+      const type = relationModal.type;
       
-      return next;
-    };
-
-    let finalTargetId: string | null = targetId;
-    let updatedList = [...members];
-
-    if (useNewTarget) {
-      if (!newTargetName.trim()) {
-        Alert.alert('Name required', 'Enter a name to create the new member.');
-        return;
-      }
-      finalTargetId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      const newMember: Member = { 
-        id: finalTargetId, 
-        name: newTargetName.trim(), 
-        sex: newTargetSex,
-        dob: newTargetDob,
-        relations: [] 
+      // Helper to perform immutable update in nested structure
+      const updateNested = (targetList: Member[], id: string, updater: (m: Member) => Member, visited = new Set<string>()): Member[] => {
+        return targetList.map(m => {
+          if (m.id === id) {
+            return updater(m);
+          }
+          if (visited.has(m.id)) return m;
+          const nextVisited = new Set(visited);
+          nextVisited.add(m.id);
+          if (m.subTree) {
+            return { ...m, subTree: updateNested(m.subTree, id, updater, nextVisited) };
+          }
+          return m;
+        });
       };
 
-      if (focusMemberId) {
-        // Add to the spouse's subTree immutably
-        updatedList = updateNested(members, focusMemberId, (spouse) => ({
-          ...spouse,
-          subTree: [...(spouse.subTree || []), newMember]
-        }));
-      } else {
-        // Add to main tree
-        updatedList = [...members, newMember];
-      }
-    } else if (focusMemberId && finalTargetId) {
-      // If selecting an existing member while in a spouse tree, 
-      // add a reference node to that spouse's subTree if they aren't already visible there.
-      const isAlreadyVisible = visibleMembers.some(m => m.id === finalTargetId);
-      if (!isAlreadyVisible) {
-        const existing = findMemberNested(members, finalTargetId);
-        if (existing) {
-          // Create a reference node. We copy basic info so it renders correctly.
-          // We don't copy the subTree to avoid deep duplication, but we keep relations
-          // so they can be updated in sync.
-          const referenceNode: Member = {
-            ...existing,
-            subTree: [] 
-          };
-          updatedList = updateNested(updatedList, focusMemberId, (spouse) => ({
+      // Haptic on save (mobile)
+      try { 
+        if (Platform.OS !== 'web') await (await import('expo-haptics')).notificationAsync((await import('expo-haptics')).NotificationFeedbackType.Success);
+      } catch {}
+
+      const addRelationPair = (currentList: Member[], id1: string, id2: string, type1to2: string): Member[] => {
+        let next = updateNested(currentList, id1, (m1) => {
+          const relations = [...(m1.relations || [])];
+          if (!relations.find((r) => r.targetId === id2 && r.type === type1to2)) {
+            relations.push({ type: type1to2, targetId: id2 });
+          }
+          return { ...m1, relations };
+        });
+
+        next = updateNested(next, id2, (m2) => {
+          const relations = [...(m2.relations || [])];
+          const type2to1 = reciprocal(type1to2);
+          if (!relations.find((r) => r.targetId === id1 && r.type === type2to1)) {
+            relations.push({ type: type2to1, targetId: id1 });
+          }
+          return { ...m2, relations };
+        });
+        
+        return next;
+      };
+
+      let finalTargetId: string | null = targetId;
+      let updatedList = [...members];
+
+      if (useNewTarget) {
+        if (!newTargetName.trim()) {
+          Alert.alert('Name required', 'Enter a name to create the new member.');
+          return;
+        }
+        finalTargetId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        const newMember: Member = { 
+          id: finalTargetId, 
+          name: newTargetName.trim(), 
+          sex: newTargetSex,
+          dob: newTargetDob,
+          relations: [] 
+        };
+
+        if (focusMemberId) {
+          // Add to the spouse's subTree immutably
+          updatedList = updateNested(members, focusMemberId, (spouse) => ({
             ...spouse,
-            subTree: [...(spouse.subTree || []), referenceNode]
+            subTree: [...(spouse.subTree || []), newMember]
           }));
+        } else {
+          // Add to main tree
+          updatedList = [...members, newMember];
+        }
+      } else if (focusMemberId && finalTargetId) {
+        // CRITICAL: Prevent circular references which cause crashes during JSON.stringify
+        if (finalTargetId === focusMemberId) {
+          Alert.alert('Invalid', 'A member cannot be added to their own subtree.');
+          return;
+        }
+
+        // If selecting an existing member while in a spouse tree, 
+        // add a reference node to that spouse's subTree if they aren't already visible there.
+        const isAlreadyVisible = visibleMembers.some(m => m.id === finalTargetId);
+        if (!isAlreadyVisible) {
+          const existing = findMemberNested(members, finalTargetId);
+          if (existing) {
+            // Create a reference node. We copy basic info so it renders correctly.
+            // We don't copy the subTree to avoid deep duplication/cycles, but we keep relations
+            // so they can be updated in sync.
+            const referenceNode: Member = {
+              ...existing,
+              subTree: [] 
+            };
+            updatedList = updateNested(updatedList, focusMemberId, (spouse) => ({
+              ...spouse,
+              subTree: [...(spouse.subTree || []), referenceNode]
+            }));
+          }
         }
       }
-    }
 
-    if (!finalTargetId) {
-      Alert.alert('Select member', 'Pick an existing member or create a new one.');
-      return;
-    }
-    if (finalTargetId === sourceId) {
-      Alert.alert('Invalid', 'Cannot relate to self.');
-      return;
-    }
-
-    updatedList = addRelationPair(updatedList, sourceId, finalTargetId, type);
-
-    // Keep behavior consistent with Add Relation screen for joint parenting + spouse child-linking.
-    const findMember = (targetList: Member[], id: string): Member | undefined => {
-      for (const m of targetList) {
-        if (m.id === id) return m;
-        if (m.subTree) {
-          const found = findMember(m.subTree, id);
-          if (found) return found;
-        }
+      if (!finalTargetId) {
+        Alert.alert('Select member', 'Pick an existing member or create a new one.');
+        return;
       }
-      return undefined;
-    };
+      if (finalTargetId === sourceId) {
+        Alert.alert('Invalid', 'Cannot relate to self.');
+        return;
+      }
 
-    if (type === 'child') {
-      const sourceMember = findMember(updatedList, sourceId);
-      const spouseRel = sourceMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
-      if (spouseRel) updatedList = addRelationPair(updatedList, spouseRel.targetId, finalTargetId, 'child');
-    } else if (type === 'spouse') {
-      const sourceMember = findMember(updatedList, sourceId);
-      const childrenRels = sourceMember?.relations?.filter((r) => r.type === 'child') || [];
-      childrenRels.forEach((c) => {
-        updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'child');
-      });
+      updatedList = addRelationPair(updatedList, sourceId, finalTargetId, type);
+
+      // Keep behavior consistent with Add Relation screen for joint parenting + spouse child-linking.
+      const findMember = (targetList: Member[], id: string, visited = new Set<string>()): Member | undefined => {
+        for (const m of targetList) {
+          if (m.id === id) return m;
+          if (visited.has(m.id)) continue;
+          const nextVisited = new Set(visited);
+          nextVisited.add(m.id);
+          if (m.subTree) {
+            const found = findMember(m.subTree, id, nextVisited);
+            if (found) return found;
+          }
+        }
+        return undefined;
+      };
+
+      if (type === 'child') {
+        const sourceMember = findMember(updatedList, sourceId);
+        // 1. Joint parenting: Add child to spouse as well
+        const spouseRel = sourceMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
+        if (spouseRel) {
+          updatedList = addRelationPair(updatedList, spouseRel.targetId, finalTargetId, 'child');
+        }
+        
+        // 2. Sibling auto-linking: New child should be sibling to all existing children of this parent
+        const otherChildren = (sourceMember?.relations || []).filter(r => r.type === 'child' && r.targetId !== finalTargetId);
+        otherChildren.forEach(c => {
+          updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'sibling');
+        });
+      } else if (type === 'spouse' || type === 'partner') {
+        const sourceMember = findMember(updatedList, sourceId);
+        const childrenRels = (sourceMember?.relations || []).filter((r) => r.type === 'child');
+        childrenRels.forEach((c) => {
+          updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'child');
+        });
+      } else if (type === 'parent') {
+        const sourceMember = findMember(updatedList, sourceId);
+        // 1. Connect parent to all siblings of sourceMember
+        const siblingRels = (sourceMember?.relations || []).filter((r) => r.type === 'sibling');
+        siblingRels.forEach((s) => {
+          updatedList = addRelationPair(updatedList, finalTargetId!, s.targetId, 'child');
+        });
+        
+        // 2. If the new parent has a spouse/partner, they should also be a parent to sourceMember and siblings
+        const parentMember = findMember(updatedList, finalTargetId!);
+        const spouseRel = parentMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
+        if (spouseRel) {
+          updatedList = addRelationPair(updatedList, spouseRel.targetId, sourceId, 'child');
+          siblingRels.forEach((s) => {
+            updatedList = addRelationPair(updatedList, spouseRel.targetId, s.targetId, 'child');
+          });
+        }
+      } else if (type === 'sibling') {
+        const sourceMember = findMember(updatedList, sourceId);
+        // 1. New sibling should share the same parents
+        const parentRels = (sourceMember?.relations || []).filter(r => r.type === 'parent');
+        parentRels.forEach(p => {
+          updatedList = addRelationPair(updatedList, finalTargetId!, p.targetId, 'parent');
+        });
+        
+        // 2. New sibling should also be a sibling to all existing siblings
+        const otherSiblings = (sourceMember?.relations || []).filter(r => r.type === 'sibling' && r.targetId !== finalTargetId);
+        otherSiblings.forEach(s => {
+          updatedList = addRelationPair(updatedList, finalTargetId!, s.targetId, 'sibling');
+        });
+      }
+
+      await FamilyService.saveFamily(updatedList);
+      setMembers(updatedList);
+      closeRelationModal();
+
+      // show toast (queued)
+      enqueueToast('Relation saved');
+    } catch (err) {
+      console.error('Failed to save relation:', err);
+      Alert.alert('Error', 'An unexpected error occurred while saving the relation.');
     }
-
-    await FamilyService.saveFamily(updatedList);
-    setMembers(updatedList);
-    closeRelationModal();
-
-    // show toast (queued)
-    enqueueToast('Relation saved');
   }, [closeRelationModal, members, visibleMembers, newTargetName, relationModal, targetId, useNewTarget, newTargetSex, newTargetDob, enqueueToast, focusMemberId, findMemberNested]);
 
   const handleDeleteMember = useCallback(
@@ -994,6 +1100,64 @@ export default function TreeScreen() {
     },
     [members]
   );
+
+  const lastTransformUpdate = useRef(0);
+  const lastViewportUpdate = useRef({ x: 0, y: 0, s: 0 });
+  const hasInitialTransform = useRef(false);
+  const onTransform = useCallback((x: number, y: number, s: number) => {
+    // Always allow first transform to set initial state
+    if (!hasInitialTransform.current) {
+      hasInitialTransform.current = true;
+      setCurrentZoom(s);
+      setCurrentTransform({ x, y, scale: s });
+      
+      // Correct viewport calculation for scale-from-center
+      const viewportWidth = containerDims.width / s;
+      const viewportHeight = containerDims.height / s;
+      const viewportX = -x / s + (containerDims.width / 2) * (1 - 1 / s);
+      const viewportY = -y / s + (containerDims.height / 2) * (1 - 1 / s);
+      
+      setViewportBounds({ x: viewportX, y: viewportY, width: viewportWidth, height: viewportHeight });
+      lastViewportUpdate.current = { x: viewportX, y: viewportY, s: s };
+      return;
+    }
+    
+    const now = Date.now();
+    // Throttle updates to ~30fps (32ms) to prevent overwhelming the JS thread
+    if (now - lastTransformUpdate.current < 32) {
+      return;
+    }
+    lastTransformUpdate.current = now;
+
+    setCurrentZoom(s);
+    setCurrentTransform({ x, y, scale: s });
+    
+    // Update viewport bounds for culling
+    const viewportWidth = containerDims.width / s;
+    const viewportHeight = containerDims.height / s;
+    const viewportX = -x / s + (containerDims.width / 2) * (1 - 1 / s);
+    const viewportY = -y / s + (containerDims.height / 2) * (1 - 1 / s);
+    
+    // Only update viewport bounds if it moved significantly (> 10px or > 2% zoom)
+    // This prevents excessive re-renders during smooth panning
+    const dx = Math.abs(viewportX - lastViewportUpdate.current.x);
+    const dy = Math.abs(viewportY - lastViewportUpdate.current.y);
+    const ds = lastViewportUpdate.current.s === 0 ? 1 : Math.abs(s - lastViewportUpdate.current.s) / lastViewportUpdate.current.s;
+
+    if (dx > 10 || dy > 10 || ds > 0.02) {
+      setViewportBounds({ x: viewportX, y: viewportY, width: viewportWidth, height: viewportHeight });
+      setCurrentTransform({ x, y, scale: s });
+      lastViewportUpdate.current = { x: viewportX, y: viewportY, s: s };
+    }
+  }, [containerDims]);
+
+  // Transform world coordinates to screen coordinates
+  const worldToScreen = useCallback((worldX: number, worldY: number) => {
+    return {
+      x: worldX * currentTransform.scale + currentTransform.x,
+      y: worldY * currentTransform.scale + currentTransform.y
+    };
+  }, [currentTransform]);
 
   return (
     <ThemedView style={{ flex: 1, backgroundColor: bgColor }}>
@@ -1119,18 +1283,14 @@ export default function TreeScreen() {
       >
         <ZoomPanContainer
           ref={zoomPanContainerRef}
-          contentWidth={contentWidth}
-          contentHeight={contentHeight}
+          contentWidth={virtualWidth || contentWidth}
+          contentHeight={virtualHeight || contentHeight}
           containerWidth={containerDims.width}
           containerHeight={containerDims.height}
           minZoom={0.05}
           maxZoom={3}
           onZoomChange={setCurrentZoom}
-          onTransform={(x, y, s) => {
-            setCurrentTranslateX(x);
-            setCurrentTranslateY(y);
-            setCurrentZoom(s);
-          }}
+          onTransform={onTransform}
           initialFocusX={
             pinnedMemberId && centeredPositions[pinnedMemberId] 
               ? centeredPositions[pinnedMemberId].x + 70 
@@ -1142,72 +1302,105 @@ export default function TreeScreen() {
               : (visibleMembers[0] && centeredPositions[visibleMembers[0].id] ? centeredPositions[visibleMembers[0].id].y + 40 : undefined)
           }
         >
-          <Pressable style={{ flex: 1, width: contentWidth, height: contentHeight, paddingBottom: 96 }} onPress={() => setExpandedNodeId(null)}>
-            <Animated.View 
-              style={[
-                StyleSheet.absoluteFill, 
-                { 
-                  backgroundColor: 'rgba(0,0,0,0.4)', 
-                  zIndex: 500,
-                  opacity: backdropAnim,
-                  pointerEvents: expandedNodeId ? 'auto' : 'none'
-                }
-              ]} 
-            />
-            <Svg style={StyleSheet.absoluteFill} width={contentWidth} height={contentHeight}>
-              {/* Spouse Edges */}
-              {spouseEdges.map((e, i) => {
-                const a = centeredPositions[e.from];
-                const b = centeredPositions[e.to];
-                if (!a || !b) return null;
-                return (
+          {/* Use fixed screen-sized container - nodes are positioned absolutely */}
+          <Pressable 
+            style={{ 
+              width: virtualWidth, 
+              height: virtualHeight, 
+              paddingBottom: 96,
+              overflow: 'visible'
+            }} 
+            onPress={() => setExpandedNodeId(null)}
+          >
+            {/* Spouse Edges - Rendered as individual SVGs to prevent GPU crashes on large trees */}
+            {spouseEdges.map((e, i) => {
+              const a = centeredPositions[e.from];
+              const b = centeredPositions[e.to];
+              if (!a || !b) return null;
+              if (!isEdgeVisible(e.from, e.to)) return null;
+              
+              const x1 = a.x + Layout.nodeWidth / 2;
+              const y1 = a.y + Layout.spouseLineOffset;
+              const x2 = b.x + Layout.nodeWidth / 2;
+              const y2 = b.y + Layout.spouseLineOffset;
+
+              const minX = Math.min(x1, x2);
+              const minY = Math.min(y1, y2);
+              const svgW = Math.max(2, Math.abs(x2 - x1));
+              const svgH = Math.max(2, Math.abs(y2 - y1));
+              
+              return (
+                <Svg 
+                  key={`spouse-${i}`}
+                  width={svgW}
+                  height={svgH}
+                  style={{ position: 'absolute', left: minX, top: minY }}
+                  pointerEvents="none"
+                >
                   <Line
-                    key={`spouse-${i}`}
-                    x1={a.x + 70} y1={a.y + 40}
-                    x2={b.x + 70} y2={b.y + 40}
+                    x1={x1 - minX} y1={y1 - minY}
+                    x2={x2 - minX} y2={y2 - minY}
                     stroke="#FF2D55"
                     strokeWidth={2}
                     strokeDasharray="5, 5"
                   />
-                );
-              })}
+                </Svg>
+              );
+            })}
 
-              {edges.map((e, i) => {
-                const a = centeredPositions[e.from];
-                const b = centeredPositions[e.to];
-                if (!a || !b) return null;
+            {/* Parent-Child Edges - Rendered as individual SVGs */}
+            {edges.map((e, i) => {
+              const a = centeredPositions[e.from];
+              const b = centeredPositions[e.to];
+              if (!a || !b) return null;
+              if (!isEdgeVisible(e.from, e.to, e.parent2)) return null;
 
-                let startX = a.x + 70;
-                let startY = a.y + 80;
+              let startX = a.x + Layout.nodeWidth / 2;
+              let startY = a.y + Layout.nodeHeight;
 
-                if (e.isJoint && e.parent2) {
-                    const p2 = centeredPositions[e.parent2];
-                    if (p2) {
-                        startX = (a.x + p2.x) / 2 + 70;
-                        startY = a.y + 40; // Start from middle of spouse line
-                    }
+              if (e.isJoint && e.parent2) {
+                const p2 = centeredPositions[e.parent2];
+                if (p2) {
+                  startX = (a.x + p2.x) / 2 + Layout.nodeWidth / 2;
+                  startY = a.y + Layout.spouseLineOffset;
                 }
+              }
 
-                const endX = b.x + 70;
-                const endY = b.y;
-                const midY = (startY + endY) / 2;
-                
-                const key = e.isJoint && e.parent2 ? [e.from, e.parent2].sort().join('|') : e.from;
-                const stroke = edgeColors.get(key) || tint;
-                return (
+              const endX = b.x + Layout.nodeWidth / 2;
+              const endY = b.y;
+              
+              const minX = Math.min(startX, endX);
+              const minY = Math.min(startY, endY);
+              const svgW = Math.max(2, Math.abs(endX - startX));
+              const svgH = Math.max(2, Math.abs(endY - startY));
+              
+              const midY = (endY - startY) * 0.5;
+              const key = e.isJoint && e.parent2 ? [e.from, e.parent2].sort().join('|') : e.from;
+              const stroke = edgeColors.get(key) || tint;
+              
+              return (
+                <Svg 
+                  key={`edge-${i}`}
+                  width={svgW}
+                  height={svgH}
+                  style={{ position: 'absolute', left: minX, top: minY }}
+                  pointerEvents="none"
+                >
                   <Path
-                    key={`edge-${i}`}
-                    d={`M ${startX} ${startY} C ${startX} ${midY} ${endX} ${midY} ${endX} ${endY}`}
+                    d={`M ${startX - minX} 0 C ${startX - minX} ${midY} ${endX - minX} ${midY} ${endX - minX} ${endY - minY}`}
                     stroke={stroke}
                     strokeOpacity={0.6}
                     strokeWidth={2}
                     fill="none"
                   />
-                );
-              })}
-            </Svg>
+                </Svg>
+              );
+            })}
 
-            {Object.entries(centeredPositions).map(([id, pos]) => {
+            {/* Tree Nodes */}
+            {Object.entries(centeredPositions)
+              .filter(([id]) => visibleNodeIds.has(id))
+              .map(([id, pos]) => {
               const m = visibleMembers.find((mm) => mm.id === id);
               if (!m) return null;
               
@@ -1234,19 +1427,6 @@ export default function TreeScreen() {
             })}
           </Pressable>
         </ZoomPanContainer>
-
-        <MiniMap
-          positions={centeredPositions}
-          edges={edges}
-          zoom={currentZoom}
-          translateX={currentTranslateX}
-          translateY={currentTranslateY}
-          containerWidth={containerDims.width}
-          containerHeight={containerDims.height}
-          contentWidth={contentWidth}
-          contentHeight={contentHeight}
-          tint={tint}
-        />
 
         {isEditing && (
           <Pressable
@@ -1718,20 +1898,21 @@ export default function TreeScreen() {
               <Pressable 
                 onPress={() => { 
                   setFocusMemberId(selectedMember.id); 
-                  setRightTrayOpen(false);
-                  // Reset zoom/pan to focus on the new root
-                  setTimeout(() => handleResetZoomPan(), 100);
-                }}
-                style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
-                    <Ionicons name="git-network-outline" size={20} color="#5856D6" />
+                    // Keep the right tray open to maintain focus on the user profile
+                    // setRightTrayOpen(false); // Removed to keep profile visible
+                    // Reset zoom/pan to focus on the new root
+                    setTimeout(() => handleResetZoomPan(), 100);
+                  }}
+                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
+                      <Ionicons name="git-network-outline" size={20} color="#5856D6" />
+                    </View>
+                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Family Subtree</ThemedText>
                   </View>
-                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>Open {selectedMember.name.split(' ')[0]}&apos;s Family Subtree</ThemedText>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </Pressable>
+                  <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                </Pressable>
 
               <View>
                 <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Subtree</ThemedText>

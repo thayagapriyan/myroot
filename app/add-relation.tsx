@@ -71,9 +71,20 @@ export default function AddRelationScreen() {
 
     const list = [...members];
     
+    const findMember = (targetList: Member[], id: string): Member | undefined => {
+      for (const m of targetList) {
+        if (m.id === id) return m;
+        if (m.subTree) {
+          const found = findMember(m.subTree, id);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+
     const addRelationPair = (id1: string, id2: string, type1to2: string) => {
-      const m1 = list.find(m => m.id === id1);
-      const m2 = list.find(m => m.id === id2);
+      const m1 = findMember(list, id1);
+      const m2 = findMember(list, id2);
       if (!m1 || !m2) return;
       m1.relations = m1.relations || [];
       m2.relations = m2.relations || [];
@@ -104,24 +115,51 @@ export default function AddRelationScreen() {
     // Add primary relation
     addRelationPair(sourceId, finalTargetId, type);
 
-    // Joint parenting logic
+    // Joint parenting & Sibling auto-linking logic
     if (type === 'child') {
-      const sourceMember = list.find(m => m.id === sourceId);
+      const sourceMember = findMember(list, sourceId);
+      // 1. Joint parenting
       const spouseRel = sourceMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
       if (spouseRel) {
         addRelationPair(spouseRel.targetId, finalTargetId, 'child');
       }
+      // 2. Sibling auto-linking
+      const otherChildren = (sourceMember?.relations || []).filter(r => r.type === 'child' && r.targetId !== finalTargetId);
+      otherChildren.forEach(c => {
+        addRelationPair(finalTargetId!, c.targetId, 'sibling');
+      });
     } else if (type === 'parent') {
-      const parentMember = list.find(m => m.id === finalTargetId);
+      const sourceMember = findMember(list, sourceId);
+      const siblingRels = (sourceMember?.relations || []).filter((r) => r.type === 'sibling');
+      siblingRels.forEach((s) => {
+        addRelationPair(s.targetId, finalTargetId!, 'parent');
+      });
+
+      const parentMember = findMember(list, finalTargetId);
       const spouseRel = parentMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
       if (spouseRel) {
         addRelationPair(sourceId, spouseRel.targetId, 'parent');
+        siblingRels.forEach((s) => {
+          addRelationPair(s.targetId, spouseRel.targetId, 'parent');
+        });
       }
     } else if (type === 'spouse' || type === 'partner') {
-      const sourceMember = list.find(m => m.id === sourceId);
-      const childrenRels = sourceMember?.relations?.filter((r) => r.type === 'child') || [];
+      const sourceMember = findMember(list, sourceId);
+      const childrenRels = (sourceMember?.relations || []).filter((r) => r.type === 'child');
       childrenRels.forEach((c) => {
         addRelationPair(finalTargetId!, c.targetId, 'child');
+      });
+    } else if (type === 'sibling') {
+      const sourceMember = findMember(list, sourceId);
+      // 1. Share parents
+      const parentRels = (sourceMember?.relations || []).filter(r => r.type === 'parent');
+      parentRels.forEach(p => {
+        addRelationPair(finalTargetId!, p.targetId, 'parent');
+      });
+      // 2. Link to other siblings
+      const otherSiblings = (sourceMember?.relations || []).filter(r => r.type === 'sibling' && r.targetId !== finalTargetId);
+      otherSiblings.forEach(s => {
+        addRelationPair(finalTargetId!, s.targetId, 'sibling');
       });
     }
 

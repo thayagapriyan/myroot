@@ -1,3 +1,4 @@
+import { Layout } from '@/constants/theme';
 import { Member, TreeLayout } from '@/types/family';
 
 export function calculateTreeLayout(members: Member[], screenWidth: number, focusId?: string | null): TreeLayout {
@@ -164,12 +165,12 @@ export function calculateTreeLayout(members: Member[], screenWidth: number, focu
 
   // Position nodes
   const positions: Record<string, { x: number; y: number }> = {};
-  const levelHeight = 220;
-  const unitGap = 120; // Balanced gap between subtrees
-  const memberGap = 160;
+  const levelHeight = Layout.levelHeight;
+  const unitGap = Layout.unitGap;
+  const memberGap = Layout.memberGap;
   const minLeft = 40;
-  const nodeWidth = 140;
-  const nodeHeight = 100;
+  const nodeWidth = Layout.nodeWidth;
+  const nodeHeight = Layout.nodeHeight;
 
   const unitOf = (id: string) => find(id);
 
@@ -275,10 +276,14 @@ export function calculateTreeLayout(members: Member[], screenWidth: number, focu
 
   // Recursive subtree width calculation to reserve enough space for all descendants
   const subtreeWidthCache = new Map<string, number>();
-  const getSubtreeWidth = (u: string): number => {
+  const getSubtreeWidth = (u: string, visited = new Set<string>()): number => {
     if (subtreeWidthCache.has(u)) return subtreeWidthCache.get(u)!;
+    if (visited.has(u)) return nodeWidth;
     
     const ownWidth = unitWidth(u);
+    const nextVisited = new Set(visited);
+    nextVisited.add(u);
+
     // Only consider children that are at a strictly greater depth to avoid infinite recursion in case of cycles
     const childrenUnits = Array.from(childUnitsOf.get(u) || [])
       .filter(cu => (unitDepth.get(cu) ?? 0) > (unitDepth.get(u) ?? 0));
@@ -290,7 +295,7 @@ export function calculateTreeLayout(members: Member[], screenWidth: number, focu
 
     // Sum of children's subtree widths plus gaps
     const childrenTotalWidth = childrenUnits.reduce((sum, cu, i) => {
-      return sum + getSubtreeWidth(cu) + (i < childrenUnits.length - 1 ? unitGap : 0);
+      return sum + getSubtreeWidth(cu, nextVisited) + (i < childrenUnits.length - 1 ? unitGap : 0);
     }, 0);
 
     const finalWidth = Math.max(ownWidth, childrenTotalWidth);
@@ -429,7 +434,11 @@ export function calculateTreeLayout(members: Member[], screenWidth: number, focu
 
       const ids = anchorId ? [anchorId, ...rest] : rest;
       ids.forEach((id, i) => {
-        positions[id] = { x: baseX + i * memberGap, y };
+        const posX = baseX + i * memberGap;
+        positions[id] = { 
+          x: isFinite(posX) ? posX : 0, 
+          y: isFinite(y) ? y : 0 
+        };
       });
     });
   }
