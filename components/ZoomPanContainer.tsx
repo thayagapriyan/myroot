@@ -204,10 +204,9 @@ export const ZoomPanContainer = React.forwardRef<ZoomPanContainerHandle, ZoomPan
               overflow: 'hidden',
             }}
           >
-            <Animated.View style={[{ flex: 1 }, animatedStyle]}>
-              <View style={{ width: contentWidth, height: contentHeight }}>
-                {children}
-              </View>
+            <Animated.View style={[{ flex: 1, width: containerWidth, height: containerHeight, zIndex: 1 }, animatedStyle]}>
+              {/* Children render their own content with virtualization */}
+              {children}
             </Animated.View>
           </View>
         </GestureDetector>

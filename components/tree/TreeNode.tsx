@@ -1,4 +1,5 @@
 import { ThemedText } from '@/components/ThemedText';
+import { Layout } from '@/constants/theme';
 import { Member } from '@/types/family';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -187,8 +188,8 @@ function TreeNodeInner({ member, position, color, isEditing = false, isPinned = 
 const styles = StyleSheet.create({
   node: {
     position: 'absolute',
-    width: 160,
-    height: 120,
+    width: Layout.nodeWidth,
+    height: Layout.nodeHeight,
     alignItems: 'center',
     justifyContent: 'center',
   },

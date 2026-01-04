@@ -1,3 +1,4 @@
+import { Layout } from '@/constants/theme';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Circle, Line, Rect } from 'react-native-svg';
@@ -34,12 +35,10 @@ export const MiniMap: React.FC<MiniMapProps> = ({
   const scale = (MAP_SIZE - padding * 2) / Math.max(contentWidth, contentHeight, 1);
   
   // Viewport rectangle in content coordinates
-  // translateX = (containerWidth/2 - centerX) * zoom
-  // So centerX = containerWidth/2 - translateX/zoom
   const viewportWidth = containerWidth / zoom;
   const viewportHeight = containerHeight / zoom;
-  const viewportX = -translateX / zoom;
-  const viewportY = -translateY / zoom;
+  const viewportX = -translateX / zoom + (containerWidth / 2) * (1 - 1 / zoom);
+  const viewportY = -translateY / zoom + (containerHeight / 2) * (1 - 1 / zoom);
 
   return (
     <View style={[styles.container, { width: MAP_SIZE, height: MAP_SIZE }]}>
@@ -62,10 +61,10 @@ export const MiniMap: React.FC<MiniMapProps> = ({
           return (
             <Line
               key={`edge-${i}`}
-              x1={from.x * scale + padding}
-              y1={from.y * scale + padding}
-              x2={to.x * scale + padding}
-              y2={to.y * scale + padding}
+              x1={(from.x + Layout.nodeWidth / 2) * scale + padding}
+              y1={(from.y + Layout.nodeHeight / 2) * scale + padding}
+              x2={(to.x + Layout.nodeWidth / 2) * scale + padding}
+              y2={(to.y + Layout.nodeHeight / 2) * scale + padding}
               stroke="#94a3b8"
               strokeWidth={1}
               opacity={0.3}
@@ -77,8 +76,8 @@ export const MiniMap: React.FC<MiniMapProps> = ({
         {Object.entries(positions).map(([id, pos]) => (
           <Circle
             key={`node-${id}`}
-            cx={pos.x * scale + padding}
-            cy={pos.y * scale + padding}
+            cx={(pos.x + Layout.nodeWidth / 2) * scale + padding}
+            cy={(pos.y + Layout.nodeHeight / 2) * scale + padding}
             r={2}
             fill="#94a3b8"
           />
