@@ -48,6 +48,7 @@ export default function TreeScreen() {
   const [rightTrayOpen, setRightTrayOpen] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
+  const [linkedSubtrees, setLinkedSubtrees] = useState<Record<string, string>>({});
   const [relationSearchQuery, setRelationSearchQuery] = useState('');
   const bgColor = useThemeColor({}, 'background');
   const cardColor = useThemeColor({}, 'card');
@@ -242,22 +243,27 @@ export default function TreeScreen() {
 
     setActiveMemberId(null);
     if (ensured.length <= 1) setIsEditing(false);
+
+    const links = await FamilyService.getLinkedSubtrees();
+    setLinkedSubtrees(links);
   }, [ensureDefaultMember, findMemberNested]);
 
   const filteredMembers = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.toLowerCase();
     
-    const allMembers: Member[] = [];
+    const allMembersMap = new Map<string, Member>();
     const flatten = (list: Member[]) => {
       list.forEach(m => {
-        allMembers.push(m);
+        if (!allMembersMap.has(m.id)) {
+          allMembersMap.set(m.id, m);
+        }
         if (m.subTree) flatten(m.subTree);
       });
     };
     flatten(members);
 
-    return allMembers.filter(m => 
+    return Array.from(allMembersMap.values()).filter(m => 
       m.name.toLowerCase().includes(query)
     ).slice(0, 5);
   }, [members, searchQuery]);
@@ -1049,6 +1055,22 @@ export default function TreeScreen() {
         });
       }
 
+      // Automatic linking: if adding a relation within a subtree, link the new/linked member to the subtree anchor
+      if (focusMemberId && finalTargetId) {
+        if (linkedSubtrees[focusMemberId]) {
+          // Recursive linking prevention: focusMemberId is already linked to another anchor.
+          // We don't link finalTargetId to focusMemberId to avoid A -> B -> C chains.
+          console.log(`Skipping automatic link for ${finalTargetId} because anchor ${focusMemberId} is already linked.`);
+        } else if (linkedSubtrees[finalTargetId]) {
+          // finalTargetId is already linked to something else. 
+          // We don't overwrite it automatically to avoid confusion.
+          console.log(`Skipping automatic link for ${finalTargetId} because it is already linked to another anchor.`);
+        } else {
+          await FamilyService.setLink(finalTargetId, focusMemberId);
+          setLinkedSubtrees(prev => ({ ...prev, [finalTargetId!]: focusMemberId }));
+        }
+      }
+
       await FamilyService.saveFamily(updatedList);
       setMembers(updatedList);
       closeRelationModal();
@@ -1084,6 +1106,24 @@ export default function TreeScreen() {
         await FamilyService.saveFamily(next);
         setMembers(next);
         setActiveMemberId((prev) => (prev === id ? null : prev));
+
+        // Cleanup links associated with this member
+        const links = { ...linkedSubtrees };
+        let linksChanged = false;
+        if (links[id]) {
+          delete links[id];
+          linksChanged = true;
+        }
+        Object.keys(links).forEach(k => {
+          if (links[k] === id) {
+            delete links[k];
+            linksChanged = true;
+          }
+        });
+        if (linksChanged) {
+          await FamilyService.saveLinkedSubtrees(links);
+          setLinkedSubtrees(links);
+        }
       };
 
       if (Platform.OS === 'web') {
@@ -1177,21 +1217,31 @@ export default function TreeScreen() {
           ),
           headerRight: () => (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 12 }}>
-              <Pressable
-                onPress={() => activeUserId && router.push(`/member?id=${activeUserId}`)}
-                style={[styles.profileBtn, { borderColor: tint }]}
-                accessibilityLabel="Profile"
-              >
-                {activeUser?.photo ? (
-                  <Image source={{ uri: activeUser.photo }} style={styles.profileImg} />
-                ) : (
-                  <View style={[styles.profilePlaceholder, { backgroundColor: tint }]}>
-                    <ThemedText style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>
-                      {activeUser?.name?.charAt(0).toUpperCase() || '?'}
-                    </ThemedText>
-                  </View>
-                )}
-              </Pressable>
+              {isEditing ? (
+                <Pressable
+                  onPress={() => setIsEditing(false)}
+                  style={[styles.headerDoneBtn, { backgroundColor: tint }]}
+                >
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                  <ThemedText style={styles.headerDoneBtnText}>Done</ThemedText>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => activeUserId && router.push(`/member?id=${activeUserId}`)}
+                  style={[styles.profileBtn, { borderColor: tint }]}
+                  accessibilityLabel="Profile"
+                >
+                  {activeUser?.photo ? (
+                    <Image source={{ uri: activeUser.photo }} style={styles.profileImg} />
+                  ) : (
+                    <View style={[styles.profilePlaceholder, { backgroundColor: tint }]}>
+                      <ThemedText style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>
+                        {activeUser?.name?.charAt(0).toUpperCase() || '?'}
+                      </ThemedText>
+                    </View>
+                  )}
+                </Pressable>
+              )}
             </View>
           ),
         }} 
@@ -1427,16 +1477,6 @@ export default function TreeScreen() {
             })}
           </Pressable>
         </ZoomPanContainer>
-
-        {isEditing && (
-          <Pressable
-            onPress={() => setIsEditing(false)}
-            style={[styles.doneBtn, { backgroundColor: tint }]}
-          >
-            <Ionicons name="checkmark" size={20} color="#fff" />
-            <ThemedText style={styles.doneBtnText}>Done</ThemedText>
-          </Pressable>
-        )}
       </View>
 
       {relationModal.open && (
@@ -1520,14 +1560,14 @@ export default function TreeScreen() {
                 </View>
               ) : (
                 <View style={{ flex: 1 }}>
-                  <View style={[styles.searchContainer, { marginBottom: 12, marginHorizontal: 0, backgroundColor: bgColor, borderColor: borderColor }]}>
-                    <Ionicons name="search" size={18} color="#94a3b8" />
+                  <View style={[styles.modalSearchBar, { backgroundColor: bgColor, borderColor: borderColor }]}>
+                    <Ionicons name="search-outline" size={18} color="#94a3b8" />
                     <TextInput
                       placeholder="Search existing members..."
                       placeholderTextColor="#94a3b8"
                       value={relationSearchQuery}
                       onChangeText={setRelationSearchQuery}
-                      style={[styles.searchInput, { color: textColor }]}
+                      style={[styles.modalSearchInput, { color: textColor }]}
                     />
                     {relationSearchQuery.length > 0 && (
                       <Pressable onPress={() => setRelationSearchQuery('')}>
@@ -1536,12 +1576,14 @@ export default function TreeScreen() {
                     )}
                   </View>
                   
-                  <ScrollView style={styles.memberList}>
+                  <ScrollView style={styles.memberList} showsVerticalScrollIndicator={false}>
                     {(() => {
-                      const allMembers: Member[] = [];
+                      const allMembersMap = new Map<string, Member>();
                       const flatten = (list: Member[]) => {
                         list.forEach(m => {
-                          allMembers.push(m);
+                          if (!allMembersMap.has(m.id)) {
+                            allMembersMap.set(m.id, m);
+                          }
                           if (m.subTree) flatten(m.subTree);
                         });
                       };
@@ -1549,43 +1591,54 @@ export default function TreeScreen() {
                       
                       const query = relationSearchQuery.toLowerCase().trim();
                       
-                      return allMembers
+                      const filtered = Array.from(allMembersMap.values())
                         .filter((m) => m.id !== relationModal.sourceId)
-                        .filter((m) => !query || m.name.toLowerCase().includes(query))
-                        .map((m) => (
-                          <Pressable
-                            key={m.id}
-                            onPress={() => setTargetId(m.id)}
-                            style={[
-                              styles.memberRow,
-                              { borderColor: borderColor, paddingVertical: 8 },
-                              targetId === m.id && { backgroundColor: tint + '15', borderColor: tint },
-                            ]}
-                          >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: tint + '20', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
-                                {m.photo ? (
-                                  <Image source={{ uri: m.photo }} style={{ width: '100%', height: '100%' }} />
-                                ) : (
-                                  <ThemedText style={{ color: tint, fontWeight: '800', fontSize: 14 }}>{m.name.charAt(0)}</ThemedText>
-                                )}
-                              </View>
-                              <View style={{ flex: 1 }}>
-                                <ThemedText style={{ color: textColor, fontWeight: '600', fontSize: 15 }}>{m.name}</ThemedText>
-                                {(m.sex || m.dob) && (
-                                  <ThemedText style={{ color: '#94a3b8', fontSize: 11 }}>
-                                    {m.sex}{m.sex && m.dob ? ' • ' : ''}{m.dob}
-                                  </ThemedText>
-                                )}
-                              </View>
+                        .filter((m) => !query || m.name.toLowerCase().includes(query));
+
+                      if (filtered.length === 0) {
+                        return (
+                          <View style={{ padding: 20, alignItems: 'center' }}>
+                            <ThemedText style={{ color: '#94a3b8', fontSize: 12, fontStyle: 'italic' }}>No members found</ThemedText>
+                          </View>
+                        );
+                      }
+
+                      return filtered.map((m) => (
+                        <Pressable
+                          key={m.id}
+                          onPress={() => setTargetId(m.id)}
+                          style={[
+                            styles.memberRow,
+                            { borderColor: borderColor },
+                            targetId === m.id && { backgroundColor: tint + '10', borderColor: tint },
+                          ]}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                            <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: tint + '15', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                              {m.photo ? (
+                                <Image source={{ uri: m.photo }} style={{ width: '100%', height: '100%' }} />
+                              ) : (
+                                <ThemedText style={{ color: tint, fontWeight: '800', fontSize: 16 }}>{m.name.charAt(0)}</ThemedText>
+                              )}
                             </View>
-                            {targetId === m.id && (
-                              <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: tint, justifyContent: 'center', alignItems: 'center' }}>
-                                <Ionicons name="checkmark" size={16} color="#fff" />
-                              </View>
-                            )}
-                          </Pressable>
-                        ));
+                            <View style={{ flex: 1 }}>
+                              <ThemedText style={{ color: textColor, fontWeight: '700', fontSize: 14 }}>{m.name}</ThemedText>
+                              {(m.sex || m.dob) && (
+                                <ThemedText style={{ color: '#94a3b8', fontSize: 11, fontWeight: '500' }}>
+                                  {m.sex}{m.sex && m.dob ? ' • ' : ''}{m.dob}
+                                </ThemedText>
+                              )}
+                            </View>
+                          </View>
+                          <View style={[
+                            styles.radioCircle, 
+                            { borderColor: borderColor },
+                            targetId === m.id && { borderColor: tint, backgroundColor: tint }
+                          ]}>
+                            {targetId === m.id && <Ionicons name="checkmark" size={14} color="#fff" />}
+                          </View>
+                        </Pressable>
+                      ));
                     })()}
                   </ScrollView>
                 </View>
@@ -1897,22 +1950,46 @@ export default function TreeScreen() {
 
               <Pressable 
                 onPress={() => { 
-                  setFocusMemberId(selectedMember.id); 
-                    // Keep the right tray open to maintain focus on the user profile
-                    // setRightTrayOpen(false); // Removed to keep profile visible
-                    // Reset zoom/pan to focus on the new root
-                    setTimeout(() => handleResetZoomPan(), 100);
+                  const anchorId = linkedSubtrees[selectedMember.id] || selectedMember.id;
+                  setFocusMemberId(anchorId); 
+                  setRightTrayOpen(false);
+                  // Reset zoom/pan to focus on the new root
+                  setTimeout(() => handleResetZoomPan(), 100);
+                }}
+                style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
+                    <Ionicons name="git-network-outline" size={20} color="#5856D6" />
+                  </View>
+                  <ThemedText style={{ color: textColor, fontWeight: '600' }}>Family Subtree</ThemedText>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </Pressable>
+
+              {linkedSubtrees[selectedMember.id] && (
+                <Pressable 
+                  onPress={async () => {
+                    await FamilyService.removeLink(selectedMember.id);
+                    setLinkedSubtrees(prev => {
+                      const next = { ...prev };
+                      delete next[selectedMember.id!];
+                      return next;
+                    });
+                    setRightTrayOpen(false);
+                    enqueueToast('Unlinked from subtree');
                   }}
-                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
+                  style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor, marginTop: -12 }]}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <View style={[styles.settingsIcon, { backgroundColor: '#5856D615' }]}>
-                      <Ionicons name="git-network-outline" size={20} color="#5856D6" />
+                    <View style={[styles.settingsIcon, { backgroundColor: '#ef444415' }]}>
+                      <Ionicons name="unlink-outline" size={20} color="#ef4444" />
                     </View>
-                    <ThemedText style={{ color: textColor, fontWeight: '600' }}>Family Subtree</ThemedText>
+                    <ThemedText style={{ color: '#ef4444', fontWeight: '600' }}>Unlink Subtree</ThemedText>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
                 </Pressable>
+              )}
 
               <View>
                 <ThemedText style={{ fontSize: 16, fontWeight: '700', marginBottom: 12 }}>Family Subtree</ThemedText>
@@ -2001,6 +2078,29 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
+  modalSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  modalSearchInput: {
+    flex: 1,
+    paddingHorizontal: 10,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  radioCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   profileBtn: {
     width: 24,
     height: 24,
@@ -2019,6 +2119,21 @@ const styles = StyleSheet.create({
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerDoneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  headerDoneBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 12,
   },
   doneBtn: {
     position: 'absolute',

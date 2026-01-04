@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const FAMILY_KEY = 'local:family';
 const PINNED_MEMBER_KEY = 'local:pinned_member';
+const LINKED_SUBTREES_KEY = 'local:linked_subtrees';
 
 export const FamilyService = {
   async getFamily(): Promise<Member[]> {
@@ -17,6 +18,7 @@ export const FamilyService = {
   async resetFamily(): Promise<void> {
     await AsyncStorage.removeItem(FAMILY_KEY);
     await AsyncStorage.removeItem(PINNED_MEMBER_KEY);
+    await AsyncStorage.removeItem(LINKED_SUBTREES_KEY);
   },
 
   async getPinnedMemberId(): Promise<string | null> {
@@ -29,5 +31,26 @@ export const FamilyService = {
     } else {
       await AsyncStorage.removeItem(PINNED_MEMBER_KEY);
     }
+  },
+
+  async getLinkedSubtrees(): Promise<Record<string, string>> {
+    const raw = await AsyncStorage.getItem(LINKED_SUBTREES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  },
+
+  async saveLinkedSubtrees(links: Record<string, string>): Promise<void> {
+    await AsyncStorage.setItem(LINKED_SUBTREES_KEY, JSON.stringify(links));
+  },
+
+  async setLink(memberId: string, anchorId: string): Promise<void> {
+    const links = await this.getLinkedSubtrees();
+    links[memberId] = anchorId;
+    await this.saveLinkedSubtrees(links);
+  },
+
+  async removeLink(memberId: string): Promise<void> {
+    const links = await this.getLinkedSubtrees();
+    delete links[memberId];
+    await this.saveLinkedSubtrees(links);
   }
 };
