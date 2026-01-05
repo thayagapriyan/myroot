@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -49,6 +50,11 @@ export default function MemberScreen() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [activeTab, setActiveTab] = useState<'details' | 'family' | 'insights'>('details');
+  const [listModal, setListModal] = useState<{ open: boolean; title: string; members: Member[] }>({
+    open: false,
+    title: '',
+    members: []
+  });
 
   const inputBg = useThemeColor({}, 'card');
   const cardBg = useThemeColor({}, 'card');
@@ -56,14 +62,33 @@ export default function MemberScreen() {
   const tint = useThemeColor({}, 'tint');
   const textColor = useThemeColor({}, 'text');
 
-  const computeAge = (dob?: string) => {
-    if (!dob) return undefined;
-    const parsed = new Date(dob);
-    if (Number.isNaN(parsed.getTime())) return undefined;
-    const now = new Date();
-    let age = now.getFullYear() - parsed.getFullYear();
-    const m = now.getMonth() - parsed.getMonth();
-    if (m < 0 || (m === 0 && now.getDate() < parsed.getDate())) age -= 1;
+  const parseDate = (dateStr?: string) => {
+    if (!dateStr) return null;
+    // Handle MM/DD/YYYY
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const m = parseInt(parts[0], 10) - 1;
+      const d = parseInt(parts[1], 10);
+      const y = parseInt(parts[2], 10);
+      const date = new Date(y, m, d);
+      if (!isNaN(date.getTime())) return date;
+    }
+    // Fallback to standard parsing
+    const fallback = new Date(dateStr);
+    return isNaN(fallback.getTime()) ? null : fallback;
+  };
+
+  const computeAge = (dob?: string, dod?: string) => {
+    const birthDate = parseDate(dob);
+    if (!birthDate) return undefined;
+    
+    const endDate = parseDate(dod) || new Date();
+    
+    let age = endDate.getFullYear() - birthDate.getFullYear();
+    const m = endDate.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && endDate.getDate() < birthDate.getDate())) {
+      age--;
+    }
     return age >= 0 ? age : undefined;
   };
 
@@ -87,7 +112,7 @@ export default function MemberScreen() {
       setDobInput(member.dob || '');
       setDodInput(member.dod || '');
       setNotesInput(member.notes || '');
-      setTempDob(member.dob ? new Date(member.dob) : null);
+      setTempDob(parseDate(member.dob));
     } else {
       setSexInput('');
       setDobInput('');
@@ -141,12 +166,20 @@ export default function MemberScreen() {
         mediaTypes: 'images',
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.85,
+        quality: 0.5,
       });
 
       if (result.canceled) return;
       let uri = result.assets?.[0]?.uri;
       if (!uri) return;
+
+      // Compress to ~10KB
+      const manipResult = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 150, height: 150 } }],
+        { compress: 0.2, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      uri = manipResult.uri;
 
       // On native, copy the image to a permanent location
       if (Platform.OS !== 'web') {
@@ -258,7 +291,7 @@ export default function MemberScreen() {
     const cleanDob = dobInput.trim();
     const cleanDod = dodInput.trim();
     const cleanNotes = notesInput.trim();
-    const age = computeAge(cleanDob || undefined);
+    const age = computeAge(cleanDob || undefined, dodInput || undefined);
 
     const list = updateNestedMember(members, member.id, (m) => ({
       ...m,
@@ -601,40 +634,46 @@ export default function MemberScreen() {
                   </Pressable>
                 ))}
               </View>
-              <ThemedText style={styles.label}>Date of Birth</ThemedText>
-              <View style={[styles.dateInputContainer, { borderColor: border }]}>
-                <TextInput
-                  placeholder="MM/DD/YYYY"
-                  placeholderTextColor="#94a3b8"
-                  value={dobInput}
-                  onChangeText={(t) => handleDateInputChange(t, setDobInput)}
-                  keyboardType="number-pad"
-                  style={[styles.dateInput, { color: textColor }]}
-                />
-                <Pressable 
-                  onPress={() => handleOpenDatePicker('profile')}
-                  style={styles.calendarIcon}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={tint} />
-                </Pressable>
-              </View>
+              <View style={styles.row}>
+                <View style={styles.flex1}>
+                  <ThemedText style={styles.label}>Date of Birth</ThemedText>
+                  <View style={[styles.dateInputContainer, { borderColor: border }]}>
+                    <TextInput
+                      placeholder="MM/DD/YYYY"
+                      placeholderTextColor="#94a3b8"
+                      value={dobInput}
+                      onChangeText={(t) => handleDateInputChange(t, setDobInput)}
+                      keyboardType="number-pad"
+                      style={[styles.dateInput, { color: textColor }]}
+                    />
+                    <Pressable 
+                      onPress={() => handleOpenDatePicker('profile')}
+                      style={styles.calendarIcon}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={tint} />
+                    </Pressable>
+                  </View>
+                </View>
 
-              <ThemedText style={styles.label}>Date of Death (Optional)</ThemedText>
-              <View style={[styles.dateInputContainer, { borderColor: border }]}>
-                <TextInput
-                  placeholder="MM/DD/YYYY"
-                  placeholderTextColor="#94a3b8"
-                  value={dodInput}
-                  onChangeText={(t) => handleDateInputChange(t, setDodInput)}
-                  keyboardType="number-pad"
-                  style={[styles.dateInput, { color: textColor }]}
-                />
-                <Pressable 
-                  onPress={() => handleOpenDatePicker('dod')}
-                  style={styles.calendarIcon}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={tint} />
-                </Pressable>
+                <View style={styles.flex1}>
+                  <ThemedText style={styles.label}>Date of Death</ThemedText>
+                  <View style={[styles.dateInputContainer, { borderColor: border }]}>
+                    <TextInput
+                      placeholder="MM/DD/YYYY"
+                      placeholderTextColor="#94a3b8"
+                      value={dodInput}
+                      onChangeText={(t) => handleDateInputChange(t, setDodInput)}
+                      keyboardType="number-pad"
+                      style={[styles.dateInput, { color: textColor }]}
+                    />
+                    <Pressable 
+                      onPress={() => handleOpenDatePicker('dod')}
+                      style={styles.calendarIcon}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={tint} />
+                    </Pressable>
+                  </View>
+                </View>
               </View>
 
               <ThemedText style={styles.label}>Notes</ThemedText>
@@ -648,7 +687,7 @@ export default function MemberScreen() {
                 style={[styles.notesInput, { backgroundColor: inputBg, borderColor: border, color: textColor }]}
               />
 
-              <ThemedText style={styles.metaText}>Age: {computeAge(dobInput) ?? '—'}</ThemedText>
+              <ThemedText style={styles.metaText}>Age: {computeAge(dobInput, dodInput) ?? '—'}</ThemedText>
               <Pressable style={[styles.saveBtn, { backgroundColor: tint }]} onPress={handleSaveProfileInfo}>
                 <ThemedText style={{ color: '#fff', fontWeight: '800' }}>Save Changes</ThemedText>
               </Pressable>
@@ -693,34 +732,46 @@ export default function MemberScreen() {
           {activeTab === 'insights' && (
             <View style={styles.section}>
               <View style={styles.insightsGrid}>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Siblings', members: derivedRelations.siblings })}
+                >
                   <Ionicons name="people-outline" size={24} color={tint} />
                   <ThemedText style={styles.summaryLabel}>Siblings</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.siblings.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Grandparents', members: derivedRelations.grandparents })}
+                >
                   <Ionicons name="business-outline" size={24} color="#3b82f6" />
                   <ThemedText style={styles.summaryLabel}>Grandparents</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.grandparents.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Cousins', members: derivedRelations.cousins })}
+                >
                   <Ionicons name="heart-outline" size={24} color="#ef4444" />
                   <ThemedText style={styles.summaryLabel}>Cousins</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.cousins.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Nephew/Niece', members: derivedRelations.nephews })}
+                >
                   <Ionicons name="star-outline" size={24} color="#f59e0b" />
                   <ThemedText style={styles.summaryLabel}>Nephew/Niece</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.nephews.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
+                </Pressable>
               </View>
             </View>
           )}
@@ -873,6 +924,48 @@ export default function MemberScreen() {
             </View>
           </Modal>
         )}
+
+        {listModal.open && (
+          <Modal transparent animationType="slide" visible={listModal.open} onRequestClose={() => setListModal({ ...listModal, open: false })}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
+                <View style={styles.sectionHeader}>
+                  <ThemedText style={styles.modalTitle}>{listModal.title}</ThemedText>
+                  <Pressable onPress={() => setListModal({ ...listModal, open: false })}>
+                    <Ionicons name="close" size={24} color={textColor} />
+                  </Pressable>
+                </View>
+                
+                <ScrollView style={styles.memberList}>
+                  {listModal.members.length > 0 ? (
+                    listModal.members.map((m) => (
+                      <Pressable 
+                        key={m.id} 
+                        style={styles.memberRow}
+                        onPress={() => {
+                          setListModal({ ...listModal, open: false });
+                          router.push(`/member?id=${m.id}`);
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          <View style={[styles.avatarSmall, { backgroundColor: tint + '20' }]}>
+                            {m.photo ? <Image source={{ uri: m.photo }} style={styles.avatarImg} /> : <ThemedText style={{ color: tint, fontWeight: '700' }}>{m.name.charAt(0)}</ThemedText>}
+                          </View>
+                          <View>
+                            <ThemedText style={{ fontWeight: '700' }}>{m.name}</ThemedText>
+                            {m.dob && <ThemedText style={{ fontSize: 12, color: '#64748b' }}>{m.dob}</ThemedText>}
+                          </View>
+                        </View>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <ThemedText style={styles.emptyText}>No members found.</ThemedText>
+                  )}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
+        )}
       </KeyboardAvoidingView>
     </ThemedView>
   );
@@ -1008,7 +1101,9 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   metaText: { fontSize: 13, color: '#64748b', marginBottom: 12, fontWeight: '500' },
-  saveBtn: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12 },
+  saveBtn: { alignSelf: 'center', paddingVertical: 12, paddingHorizontal: 32, borderRadius: 12 },
+  row: { flexDirection: 'row', gap: 12 },
+  flex1: { flex: 1 },
   memberList: { maxHeight: 200, marginBottom: 16 },
   memberRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 4 },

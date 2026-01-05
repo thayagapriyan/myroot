@@ -106,9 +106,7 @@ export const SideTray = memo(({ isOpen, onClose, side, title, children }: SideTr
       >
         <View style={[styles.header, { borderBottomColor: borderColor, paddingTop: Math.max(insets.top, 16) }]}>
           <View style={styles.headerTitleRow}>
-            {side === 'right' && <View style={styles.grabber} />}
             <ThemedText style={styles.title}>{title}</ThemedText>
-            {side === 'left' && <View style={styles.grabber} />}
           </View>
           <Pressable onPress={onClose} hitSlop={15} style={styles.closeBtn}>
             <Ionicons name="close" size={22} color={textColor} />
@@ -151,13 +149,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-  },
-  grabber: {
-    width: 4,
-    height: 20,
-    borderRadius: 2,
-    backgroundColor: '#cbd5e1',
-    opacity: 0.5,
   },
   title: {
     fontSize: 19,
