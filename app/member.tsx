@@ -3,13 +3,14 @@ import { ThemedView } from '@/components/ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
 import { Member } from '@/types/family';
+import { findMemberNested, reciprocalRelation, updateNestedMember } from '@/utils/familyUtils';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -21,18 +22,6 @@ const RELATION_TYPES = [
   'partner',
   'other',
 ];
-
-function reciprocal(type: string) {
-  switch (type) {
-    case 'parent': return 'child';
-    case 'child': return 'parent';
-    case 'spouse':
-    case 'partner':
-    case 'sibling':
-      return type;
-    default: return 'other';
-  }
-}
 
 export default function MemberScreen() {
   const { id } = useLocalSearchParams();
@@ -78,17 +67,6 @@ export default function MemberScreen() {
     return age >= 0 ? age : undefined;
   };
 
-  const findMemberNested = useCallback((list: Member[], targetId: string): Member | undefined => {
-    for (const m of list) {
-      if (m.id === targetId) return m;
-      if (m.subTree) {
-        const found = findMemberNested(m.subTree, targetId);
-        if (found) return found;
-      }
-    }
-    return undefined;
-  }, []);
-
   useEffect(() => {
     (async () => {
       const list = await FamilyService.getFamily();
@@ -101,7 +79,7 @@ export default function MemberScreen() {
         setIsPinned(pinnedId === found.id);
       }
     })();
-  }, [id, findMemberNested]);
+  }, [id]);
 
   useEffect(() => {
     if (member) {
@@ -122,7 +100,7 @@ export default function MemberScreen() {
   const saveMembers = async (list: Member[]) => {
     await FamilyService.saveFamily(list);
     setMembers(list);
-    const found = list.find((m) => m.id === id);
+    const found = findMemberNested(list, id as string);
     setMember(found || null);
   };
 
@@ -139,11 +117,10 @@ export default function MemberScreen() {
 
   const handleSaveName = async () => {
     if (!member || !editedName.trim()) return;
-    const list = [...members];
-    const idx = list.findIndex((m) => m.id === member.id);
-    if (idx === -1) return;
-
-    list[idx] = { ...list[idx], name: editedName.trim() };
+    const list = updateNestedMember(members, member.id, (m) => ({
+      ...m,
+      name: editedName.trim()
+    }));
     await saveMembers(list);
     setIsEditingName(false);
   };
@@ -276,24 +253,21 @@ export default function MemberScreen() {
 
   const handleSaveProfileInfo = async () => {
     if (!member) return;
-    const list = [...members];
-    const idx = list.findIndex((m) => m.id === member.id);
-    if (idx === -1) return Alert.alert('Error', 'Member not found');
-
+    
     const cleanSex = sexInput.trim();
     const cleanDob = dobInput.trim();
     const cleanDod = dodInput.trim();
     const cleanNotes = notesInput.trim();
     const age = computeAge(cleanDob || undefined);
 
-    list[idx] = {
-      ...list[idx],
+    const list = updateNestedMember(members, member.id, (m) => ({
+      ...m,
       sex: cleanSex || undefined,
       dob: cleanDob || undefined,
       dod: cleanDod || undefined,
       notes: cleanNotes || undefined,
       age,
-    };
+    }));
 
     await saveMembers(list);
     Alert.alert('Saved', 'Profile updated');
@@ -305,20 +279,22 @@ export default function MemberScreen() {
     if (!type) return Alert.alert('Select relation type');
     if (targetId === member.id) return Alert.alert('Invalid', 'Cannot relate to self');
 
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    const targetIdx = list.findIndex((m) => m.id === targetId);
-    if (meIdx === -1 || targetIdx === -1) return Alert.alert('Error', 'Member not found');
+    let list = updateNestedMember(members, member.id, (m) => {
+      const relations = [...(m.relations || [])];
+      if (!relations.find((r) => r.targetId === targetId && r.type === type)) {
+        relations.push({ type, targetId });
+      }
+      return { ...m, relations };
+    });
 
-    list[meIdx].relations = list[meIdx].relations || [];
-    list[targetIdx].relations = list[targetIdx].relations || [];
-
-    const exists = list[meIdx].relations!.find((r) => r.targetId === targetId && r.type === type);
-    if (exists) return Alert.alert('Exists', 'This relation already exists');
-
-    list[meIdx].relations!.push({ type, targetId });
-    const reciprocalType = reciprocal(type);
-    list[targetIdx].relations!.push({ type: reciprocalType, targetId: member.id });
+    list = updateNestedMember(list, targetId, (m) => {
+      const relations = [...(m.relations || [])];
+      const reciprocalType = reciprocalRelation(type);
+      if (!relations.find((r) => r.targetId === member.id && r.type === reciprocalType)) {
+        relations.push({ type: reciprocalType, targetId: member.id });
+      }
+      return { ...m, relations };
+    });
 
     await saveMembers(list);
     setAdding(false);
@@ -331,10 +307,6 @@ export default function MemberScreen() {
     const type = selectedType === 'other' ? customLabel || 'other' : selectedType;
     if (!type) return Alert.alert('Select relation type');
 
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    if (meIdx === -1) return Alert.alert('Error', 'Member not found');
-
     const newId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     const newMember: Member = { 
       id: newId, 
@@ -342,14 +314,13 @@ export default function MemberScreen() {
       sex: newMemberSex,
       dob: newMemberDob || undefined,
       age: computeAge(newMemberDob) || undefined,
-      relations: [] 
+      relations: [{ type: reciprocalRelation(type), targetId: member.id }] 
     };
-    list.push(newMember);
 
-    list[meIdx].relations = list[meIdx].relations || [];
-    list[meIdx].relations!.push({ type, targetId: newId });
-    const reciprocalType = reciprocal(type);
-    newMember.relations!.push({ type: reciprocalType, targetId: member.id });
+    const list = updateNestedMember([...members, newMember], member.id, (m) => ({
+      ...m,
+      relations: [...(m.relations || []), { type, targetId: newId }]
+    }));
 
     await saveMembers(list);
     setAdding(false);
@@ -374,27 +345,28 @@ export default function MemberScreen() {
     if (editingIndex === null || !member) return;
     if (!editingType) return Alert.alert('Select relation type');
     const newType = editingType === 'other' ? (editingCustom || 'other') : editingType;
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    if (meIdx === -1) return Alert.alert('Error', 'Member not found');
-
-    const rel = list[meIdx].relations?.[editingIndex];
+    
+    const rel = member.relations?.[editingIndex];
     if (!rel) return Alert.alert('Error', 'Relation not found');
     const targetId = rel.targetId;
 
-    list[meIdx].relations![editingIndex].type = newType;
+    let list = updateNestedMember(members, member.id, (m) => {
+      const relations = [...(m.relations || [])];
+      relations[editingIndex] = { ...relations[editingIndex], type: newType };
+      return { ...m, relations };
+    });
 
-    const targetIdx = list.findIndex((m) => m.id === targetId);
-    if (targetIdx !== -1) {
-      list[targetIdx].relations = list[targetIdx].relations || [];
-      const recIdx = list[targetIdx].relations!.findIndex((r) => r.targetId === member.id);
-      const recType = reciprocal(newType);
+    list = updateNestedMember(list, targetId, (m) => {
+      const relations = [...(m.relations || [])];
+      const recIdx = relations.findIndex((r) => r.targetId === member.id);
+      const recType = reciprocalRelation(newType);
       if (recIdx !== -1) {
-        list[targetIdx].relations![recIdx].type = recType;
+        relations[recIdx] = { ...relations[recIdx], type: recType };
       } else {
-        list[targetIdx].relations!.push({ type: recType, targetId: member.id });
+        relations.push({ type: recType, targetId: member.id });
       }
-    }
+      return { ...m, relations };
+    });
 
     await saveMembers(list);
     setEditingIndex(null);
@@ -406,17 +378,20 @@ export default function MemberScreen() {
     if (!member) return;
 
     const performRemove = async () => {
-      const list = [...members];
-      const meIdx = list.findIndex((m) => m.id === member.id);
-      if (meIdx === -1) return;
-      const rel = list[meIdx].relations?.[index];
+      const rel = member.relations?.[index];
       if (!rel) return;
       const targetId = rel.targetId;
-      list[meIdx].relations = list[meIdx].relations!.filter((_, i) => i !== index);
-      const targetIdx = list.findIndex((m) => m.id === targetId);
-      if (targetIdx !== -1) {
-        list[targetIdx].relations = (list[targetIdx].relations || []).filter((r) => r.targetId !== member.id);
-      }
+
+      let list = updateNestedMember(members, member.id, (m) => ({
+        ...m,
+        relations: (m.relations || []).filter((_, i) => i !== index)
+      }));
+
+      list = updateNestedMember(list, targetId, (m) => ({
+        ...m,
+        relations: (m.relations || []).filter((r) => r.targetId !== member.id)
+      }));
+
       await saveMembers(list);
     };
 
@@ -572,15 +547,27 @@ export default function MemberScreen() {
               )}
             </View>
 
-            <Pressable 
-              onPress={handleTogglePin}
-              style={[styles.pinToggle, { backgroundColor: isPinned ? tint : tint + '15', borderColor: isPinned ? tint : border }]}
-            >
-              <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
-              <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
-                {isPinned ? 'Pinned' : 'Pin me in tree'}
-              </ThemedText>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Pressable 
+                onPress={handleTogglePin}
+                style={[styles.pinToggle, { backgroundColor: isPinned ? tint : tint + '15', borderColor: isPinned ? tint : border }]}
+              >
+                <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
+                <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
+                  {isPinned ? 'Pinned' : 'Pin me'}
+                </ThemedText>
+              </Pressable>
+
+              <Pressable 
+                onPress={() => router.push(`/tree?focusId=${member.id}`)}
+                style={[styles.pinToggle, { backgroundColor: '#5856D615', borderColor: '#5856D630' }]}
+              >
+                <Ionicons name="git-network-outline" size={16} color="#5856D6" />
+                <ThemedText style={[styles.pinToggleText, { color: '#5856D6' }]}>
+                  Family Subtree
+                </ThemedText>
+              </Pressable>
+            </View>
 
             {member.dob && <ThemedText style={styles.profileDob}>Born: {member.dob}</ThemedText>}
           </View>

@@ -7,6 +7,7 @@ import { Layout } from '@/constants/theme';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
 import { Member } from '@/types/family';
+import { findMemberNested, findPathToMember, reciprocalRelation, updateNestedMember } from '@/utils/familyUtils';
 import { calculateTreeLayout } from '@/utils/treeLayout';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,7 +15,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import JSZip from 'jszip';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,19 +24,9 @@ import Svg, { Line, Path } from 'react-native-svg';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-const reciprocal = (type: string) => {
-  switch (type) {
-    case 'parent': return 'child';
-    case 'child': return 'parent';
-    case 'spouse':
-    case 'partner':
-    case 'sibling': return type;
-    default: return 'other';
-  }
-};
-
 export default function TreeScreen() {
   const router = useRouter();
+  const { focusId: focusIdParam } = useLocalSearchParams<{ focusId?: string }>();
   const [members, setMembers] = useState<Member[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [activeMemberId, setActiveMemberId] = useState<string | null>(null);
@@ -47,7 +38,7 @@ export default function TreeScreen() {
   const [leftTrayOpen, setLeftTrayOpen] = useState(false);
   const [rightTrayOpen, setRightTrayOpen] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
-  const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
+  const [focusStack, setFocusStack] = useState<string[]>([]);
   const [linkedSubtrees, setLinkedSubtrees] = useState<Record<string, string>>({});
   const [relationSearchQuery, setRelationSearchQuery] = useState('');
   const bgColor = useThemeColor({}, 'background');
@@ -56,59 +47,42 @@ export default function TreeScreen() {
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
 
-  const findMemberNested = useCallback((list: Member[], id: string, visited = new Set<string>()): Member | undefined => {
-    for (const m of list) {
-      if (m.id === id) return m;
-      if (visited.has(m.id)) continue;
-      visited.add(m.id);
-      if (m.subTree) {
-        const found = findMemberNested(m.subTree, id, visited);
-        if (found) return found;
-      }
-    }
-    return undefined;
-  }, []);
+  const focusMemberId = focusStack.length > 0 ? focusStack[focusStack.length - 1] : null;
 
   const activeUser = useMemo(() => {
     const id = pinnedMemberId || activeUserId;
     if (!id) return undefined;
     return findMemberNested(members, id);
-  }, [members, activeUserId, pinnedMemberId, findMemberNested]);
+  }, [members, activeUserId, pinnedMemberId]);
 
   const selectedMember = useMemo(() => {
     if (!selectedMemberId) return undefined;
     return findMemberNested(members, selectedMemberId);
-  }, [members, selectedMemberId, findMemberNested]);
+  }, [members, selectedMemberId]);
 
   const visibleMembers = useMemo(() => {
     if (!focusMemberId) {
       // Main tree: show only top-level members
       return members;
     }
-    // Spouse tree: show the spouse themselves (from main tree) 
-    // PLUS anyone explicitly added to this spouse's nested subTree (recursively)
-    const spouse = findMemberNested(members, focusMemberId);
-    if (!spouse) return [];
+    // Subtree: show the anchor member PLUS their direct subTree members
+    const anchor = findMemberNested(members, focusMemberId);
+    if (!anchor) return [];
     
-    const flattened: Member[] = [spouse];
-    const collect = (list: Member[], visited = new Set<string>()) => {
-      list.forEach(m => {
-        if (visited.has(m.id)) return;
-        visited.add(m.id);
-        flattened.push(m);
-        if (m.subTree) collect(m.subTree, visited);
-      });
-    };
-    if (spouse.subTree) collect(spouse.subTree, new Set([spouse.id]));
-    
-    // Remove duplicates just in case
-    const seen = new Set<string>();
-    return flattened.filter(m => {
-      if (seen.has(m.id)) return false;
-      seen.add(m.id);
-      return true;
-    });
-  }, [members, focusMemberId, findMemberNested]);
+    // We only show the anchor and their IMMEDIATE subTree members to isolate nested subtrees
+    return [anchor, ...(anchor.subTree || [])];
+  }, [members, focusMemberId]);
+
+  useEffect(() => {
+    if (focusIdParam && members.length > 0) {
+      const path = findPathToMember(members, focusIdParam);
+      if (path) {
+        setFocusStack(path);
+        // Clear the param so it doesn't re-trigger if we navigate back/forth
+        router.setParams({ focusId: undefined });
+      }
+    }
+  }, [focusIdParam, members, router]);
 
   const [relationModal, setRelationModal] = useState<{
     open: boolean;
@@ -881,29 +855,13 @@ export default function TreeScreen() {
       const sourceId = relationModal.sourceId;
       const type = relationModal.type;
       
-      // Helper to perform immutable update in nested structure
-      const updateNested = (targetList: Member[], id: string, updater: (m: Member) => Member, visited = new Set<string>()): Member[] => {
-        return targetList.map(m => {
-          if (m.id === id) {
-            return updater(m);
-          }
-          if (visited.has(m.id)) return m;
-          const nextVisited = new Set(visited);
-          nextVisited.add(m.id);
-          if (m.subTree) {
-            return { ...m, subTree: updateNested(m.subTree, id, updater, nextVisited) };
-          }
-          return m;
-        });
-      };
-
       // Haptic on save (mobile)
       try { 
         if (Platform.OS !== 'web') await (await import('expo-haptics')).notificationAsync((await import('expo-haptics')).NotificationFeedbackType.Success);
       } catch {}
 
       const addRelationPair = (currentList: Member[], id1: string, id2: string, type1to2: string): Member[] => {
-        let next = updateNested(currentList, id1, (m1) => {
+        let next = updateNestedMember(currentList, id1, (m1) => {
           const relations = [...(m1.relations || [])];
           if (!relations.find((r) => r.targetId === id2 && r.type === type1to2)) {
             relations.push({ type: type1to2, targetId: id2 });
@@ -911,9 +869,9 @@ export default function TreeScreen() {
           return { ...m1, relations };
         });
 
-        next = updateNested(next, id2, (m2) => {
+        next = updateNestedMember(next, id2, (m2) => {
           const relations = [...(m2.relations || [])];
-          const type2to1 = reciprocal(type1to2);
+          const type2to1 = reciprocalRelation(type1to2);
           if (!relations.find((r) => r.targetId === id1 && r.type === type2to1)) {
             relations.push({ type: type2to1, targetId: id1 });
           }
@@ -942,7 +900,7 @@ export default function TreeScreen() {
 
         if (focusMemberId) {
           // Add to the spouse's subTree immutably
-          updatedList = updateNested(members, focusMemberId, (spouse) => ({
+          updatedList = updateNestedMember(members, focusMemberId, (spouse) => ({
             ...spouse,
             subTree: [...(spouse.subTree || []), newMember]
           }));
@@ -970,7 +928,7 @@ export default function TreeScreen() {
               ...existing,
               subTree: [] 
             };
-            updatedList = updateNested(updatedList, focusMemberId, (spouse) => ({
+            updatedList = updateNestedMember(updatedList, focusMemberId, (spouse) => ({
               ...spouse,
               subTree: [...(spouse.subTree || []), referenceNode]
             }));
@@ -989,23 +947,8 @@ export default function TreeScreen() {
 
       updatedList = addRelationPair(updatedList, sourceId, finalTargetId, type);
 
-      // Keep behavior consistent with Add Relation screen for joint parenting + spouse child-linking.
-      const findMember = (targetList: Member[], id: string, visited = new Set<string>()): Member | undefined => {
-        for (const m of targetList) {
-          if (m.id === id) return m;
-          if (visited.has(m.id)) continue;
-          const nextVisited = new Set(visited);
-          nextVisited.add(m.id);
-          if (m.subTree) {
-            const found = findMember(m.subTree, id, nextVisited);
-            if (found) return found;
-          }
-        }
-        return undefined;
-      };
-
       if (type === 'child') {
-        const sourceMember = findMember(updatedList, sourceId);
+        const sourceMember = findMemberNested(updatedList, sourceId);
         // 1. Joint parenting: Add child to spouse as well
         const spouseRel = sourceMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
         if (spouseRel) {
@@ -1018,13 +961,13 @@ export default function TreeScreen() {
           updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'sibling');
         });
       } else if (type === 'spouse' || type === 'partner') {
-        const sourceMember = findMember(updatedList, sourceId);
+        const sourceMember = findMemberNested(updatedList, sourceId);
         const childrenRels = (sourceMember?.relations || []).filter((r) => r.type === 'child');
         childrenRels.forEach((c) => {
           updatedList = addRelationPair(updatedList, finalTargetId!, c.targetId, 'child');
         });
       } else if (type === 'parent') {
-        const sourceMember = findMember(updatedList, sourceId);
+        const sourceMember = findMemberNested(updatedList, sourceId);
         // 1. Connect parent to all siblings of sourceMember
         const siblingRels = (sourceMember?.relations || []).filter((r) => r.type === 'sibling');
         siblingRels.forEach((s) => {
@@ -1032,7 +975,7 @@ export default function TreeScreen() {
         });
         
         // 2. If the new parent has a spouse/partner, they should also be a parent to sourceMember and siblings
-        const parentMember = findMember(updatedList, finalTargetId!);
+        const parentMember = findMemberNested(updatedList, finalTargetId!);
         const spouseRel = parentMember?.relations?.find((r) => r.type === 'spouse' || r.type === 'partner');
         if (spouseRel) {
           updatedList = addRelationPair(updatedList, spouseRel.targetId, sourceId, 'child');
@@ -1041,7 +984,7 @@ export default function TreeScreen() {
           });
         }
       } else if (type === 'sibling') {
-        const sourceMember = findMember(updatedList, sourceId);
+        const sourceMember = findMemberNested(updatedList, sourceId);
         // 1. New sibling should share the same parents
         const parentRels = (sourceMember?.relations || []).filter(r => r.type === 'parent');
         parentRels.forEach(p => {
@@ -1311,11 +1254,16 @@ export default function TreeScreen() {
               {findMemberNested(members, focusMemberId)?.name}&apos;s Family Subtree
             </ThemedText>
             <Pressable 
-              onPress={() => { setFocusMemberId(null); setTimeout(() => handleResetZoomPan(), 100); }}
+              onPress={() => { 
+                setFocusStack(prev => prev.slice(0, -1)); 
+                setTimeout(() => handleResetZoomPan(), 100); 
+              }}
               style={styles.focusCloseBtn}
             >
-              <ThemedText style={{ color: '#fff', fontWeight: '900', marginRight: 4, fontSize: 8 }}>Done</ThemedText>
-              <Ionicons name="close-circle" size={10} color="#fff" />
+              <ThemedText style={{ color: '#fff', fontWeight: '900', marginRight: 4, fontSize: 8 }}>
+                {focusStack.length > 1 ? 'Back' : 'Done'}
+              </ThemedText>
+              <Ionicons name={focusStack.length > 1 ? "arrow-back-circle" : "close-circle"} size={10} color="#fff" />
             </Pressable>
           </View>
         </View>
@@ -1835,7 +1783,7 @@ export default function TreeScreen() {
 
                 {focusMemberId && (
                   <Pressable
-                    onPress={() => { setFocusMemberId(null); setLeftTrayOpen(false); setTimeout(() => handleResetZoomPan(), 100); }}
+                    onPress={() => { setFocusStack([]); setLeftTrayOpen(false); setTimeout(() => handleResetZoomPan(), 100); }}
                     style={[styles.settingsItem, { backgroundColor: cardColor, borderColor: borderColor }]}
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1941,7 +1889,7 @@ export default function TreeScreen() {
               <Pressable 
                 onPress={() => { 
                   const anchorId = linkedSubtrees[selectedMember.id] || selectedMember.id;
-                  setFocusMemberId(anchorId); 
+                  setFocusStack(prev => [...prev, anchorId]); 
                   setRightTrayOpen(false);
                   // Reset zoom/pan to focus on the new root
                   setTimeout(() => handleResetZoomPan(), 100);
