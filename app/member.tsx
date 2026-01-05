@@ -578,7 +578,7 @@ export default function MemberScreen() {
             >
               <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
               <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
-                {isPinned ? 'Pinned as Default' : 'Pin as Default'}
+                {isPinned ? 'Pinned' : 'Pin me in tree'}
               </ThemedText>
             </Pressable>
 
@@ -670,26 +670,6 @@ export default function MemberScreen() {
 
           {activeTab === 'family' && (
             <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
-                <Pressable style={[styles.addButton, { backgroundColor: tint }]} onPress={() => setAdding(true)}>
-                  <ThemedText style={styles.addButtonText}>+ Add</ThemedText>
-                </Pressable>
-              </View>
-
-              <View style={styles.quickActions}>
-                {(['parent', 'child', 'spouse', 'sibling'] as const).map((type) => (
-                  <Pressable
-                    key={type}
-                    onPress={() => { setSelectedType(type); setAdding(true); }}
-                    style={[styles.quickActionBtn, { backgroundColor: tint + '10', borderColor: tint + '30' }]}
-                  >
-                    <Ionicons name="add-circle-outline" size={18} color={tint} />
-                    <ThemedText style={[styles.quickActionText, { color: tint }]}>{type}</ThemedText>
-                  </Pressable>
-                ))}
-              </View>
-
               {member.relations && member.relations.length > 0 ? (
                 member.relations.map((rel, idx) => {
                   const target = findMemberNested(members, rel.targetId);
@@ -725,7 +705,6 @@ export default function MemberScreen() {
 
           {activeTab === 'insights' && (
             <View style={styles.section}>
-              <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
               <View style={styles.insightsGrid}>
                 <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
                   <Ionicons name="people-outline" size={24} color={tint} />
