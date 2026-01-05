@@ -3,13 +3,15 @@ import { ThemedView } from '@/components/ThemedView';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { FamilyService } from '@/services/familyService';
 import { Member } from '@/types/family';
+import { findMemberNested, reciprocalRelation, updateNestedMember } from '@/utils/familyUtils';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -21,18 +23,6 @@ const RELATION_TYPES = [
   'partner',
   'other',
 ];
-
-function reciprocal(type: string) {
-  switch (type) {
-    case 'parent': return 'child';
-    case 'child': return 'parent';
-    case 'spouse':
-    case 'partner':
-    case 'sibling':
-      return type;
-    default: return 'other';
-  }
-}
 
 export default function MemberScreen() {
   const { id } = useLocalSearchParams();
@@ -60,6 +50,11 @@ export default function MemberScreen() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [activeTab, setActiveTab] = useState<'details' | 'family' | 'insights'>('details');
+  const [listModal, setListModal] = useState<{ open: boolean; title: string; members: Member[] }>({
+    open: false,
+    title: '',
+    members: []
+  });
 
   const inputBg = useThemeColor({}, 'card');
   const cardBg = useThemeColor({}, 'card');
@@ -67,27 +62,35 @@ export default function MemberScreen() {
   const tint = useThemeColor({}, 'tint');
   const textColor = useThemeColor({}, 'text');
 
-  const computeAge = (dob?: string) => {
-    if (!dob) return undefined;
-    const parsed = new Date(dob);
-    if (Number.isNaN(parsed.getTime())) return undefined;
-    const now = new Date();
-    let age = now.getFullYear() - parsed.getFullYear();
-    const m = now.getMonth() - parsed.getMonth();
-    if (m < 0 || (m === 0 && now.getDate() < parsed.getDate())) age -= 1;
-    return age >= 0 ? age : undefined;
+  const parseDate = (dateStr?: string) => {
+    if (!dateStr) return null;
+    // Handle MM/DD/YYYY
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const m = parseInt(parts[0], 10) - 1;
+      const d = parseInt(parts[1], 10);
+      const y = parseInt(parts[2], 10);
+      const date = new Date(y, m, d);
+      if (!isNaN(date.getTime())) return date;
+    }
+    // Fallback to standard parsing
+    const fallback = new Date(dateStr);
+    return isNaN(fallback.getTime()) ? null : fallback;
   };
 
-  const findMemberNested = useCallback((list: Member[], targetId: string): Member | undefined => {
-    for (const m of list) {
-      if (m.id === targetId) return m;
-      if (m.subTree) {
-        const found = findMemberNested(m.subTree, targetId);
-        if (found) return found;
-      }
+  const computeAge = (dob?: string, dod?: string) => {
+    const birthDate = parseDate(dob);
+    if (!birthDate) return undefined;
+    
+    const endDate = parseDate(dod) || new Date();
+    
+    let age = endDate.getFullYear() - birthDate.getFullYear();
+    const m = endDate.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && endDate.getDate() < birthDate.getDate())) {
+      age--;
     }
-    return undefined;
-  }, []);
+    return age >= 0 ? age : undefined;
+  };
 
   useEffect(() => {
     (async () => {
@@ -101,7 +104,7 @@ export default function MemberScreen() {
         setIsPinned(pinnedId === found.id);
       }
     })();
-  }, [id, findMemberNested]);
+  }, [id]);
 
   useEffect(() => {
     if (member) {
@@ -109,7 +112,7 @@ export default function MemberScreen() {
       setDobInput(member.dob || '');
       setDodInput(member.dod || '');
       setNotesInput(member.notes || '');
-      setTempDob(member.dob ? new Date(member.dob) : null);
+      setTempDob(parseDate(member.dob));
     } else {
       setSexInput('');
       setDobInput('');
@@ -122,7 +125,7 @@ export default function MemberScreen() {
   const saveMembers = async (list: Member[]) => {
     await FamilyService.saveFamily(list);
     setMembers(list);
-    const found = list.find((m) => m.id === id);
+    const found = findMemberNested(list, id as string);
     setMember(found || null);
   };
 
@@ -139,11 +142,10 @@ export default function MemberScreen() {
 
   const handleSaveName = async () => {
     if (!member || !editedName.trim()) return;
-    const list = [...members];
-    const idx = list.findIndex((m) => m.id === member.id);
-    if (idx === -1) return;
-
-    list[idx] = { ...list[idx], name: editedName.trim() };
+    const list = updateNestedMember(members, member.id, (m) => ({
+      ...m,
+      name: editedName.trim()
+    }));
     await saveMembers(list);
     setIsEditingName(false);
   };
@@ -164,12 +166,20 @@ export default function MemberScreen() {
         mediaTypes: 'images',
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.85,
+        quality: 0.5,
       });
 
       if (result.canceled) return;
       let uri = result.assets?.[0]?.uri;
       if (!uri) return;
+
+      // Compress to ~10KB
+      const manipResult = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 150, height: 150 } }],
+        { compress: 0.2, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      uri = manipResult.uri;
 
       // On native, copy the image to a permanent location
       if (Platform.OS !== 'web') {
@@ -276,24 +286,21 @@ export default function MemberScreen() {
 
   const handleSaveProfileInfo = async () => {
     if (!member) return;
-    const list = [...members];
-    const idx = list.findIndex((m) => m.id === member.id);
-    if (idx === -1) return Alert.alert('Error', 'Member not found');
-
+    
     const cleanSex = sexInput.trim();
     const cleanDob = dobInput.trim();
     const cleanDod = dodInput.trim();
     const cleanNotes = notesInput.trim();
-    const age = computeAge(cleanDob || undefined);
+    const age = computeAge(cleanDob || undefined, dodInput || undefined);
 
-    list[idx] = {
-      ...list[idx],
+    const list = updateNestedMember(members, member.id, (m) => ({
+      ...m,
       sex: cleanSex || undefined,
       dob: cleanDob || undefined,
       dod: cleanDod || undefined,
       notes: cleanNotes || undefined,
       age,
-    };
+    }));
 
     await saveMembers(list);
     Alert.alert('Saved', 'Profile updated');
@@ -305,20 +312,22 @@ export default function MemberScreen() {
     if (!type) return Alert.alert('Select relation type');
     if (targetId === member.id) return Alert.alert('Invalid', 'Cannot relate to self');
 
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    const targetIdx = list.findIndex((m) => m.id === targetId);
-    if (meIdx === -1 || targetIdx === -1) return Alert.alert('Error', 'Member not found');
+    let list = updateNestedMember(members, member.id, (m) => {
+      const relations = [...(m.relations || [])];
+      if (!relations.find((r) => r.targetId === targetId && r.type === type)) {
+        relations.push({ type, targetId });
+      }
+      return { ...m, relations };
+    });
 
-    list[meIdx].relations = list[meIdx].relations || [];
-    list[targetIdx].relations = list[targetIdx].relations || [];
-
-    const exists = list[meIdx].relations!.find((r) => r.targetId === targetId && r.type === type);
-    if (exists) return Alert.alert('Exists', 'This relation already exists');
-
-    list[meIdx].relations!.push({ type, targetId });
-    const reciprocalType = reciprocal(type);
-    list[targetIdx].relations!.push({ type: reciprocalType, targetId: member.id });
+    list = updateNestedMember(list, targetId, (m) => {
+      const relations = [...(m.relations || [])];
+      const reciprocalType = reciprocalRelation(type);
+      if (!relations.find((r) => r.targetId === member.id && r.type === reciprocalType)) {
+        relations.push({ type: reciprocalType, targetId: member.id });
+      }
+      return { ...m, relations };
+    });
 
     await saveMembers(list);
     setAdding(false);
@@ -331,10 +340,6 @@ export default function MemberScreen() {
     const type = selectedType === 'other' ? customLabel || 'other' : selectedType;
     if (!type) return Alert.alert('Select relation type');
 
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    if (meIdx === -1) return Alert.alert('Error', 'Member not found');
-
     const newId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     const newMember: Member = { 
       id: newId, 
@@ -342,14 +347,13 @@ export default function MemberScreen() {
       sex: newMemberSex,
       dob: newMemberDob || undefined,
       age: computeAge(newMemberDob) || undefined,
-      relations: [] 
+      relations: [{ type: reciprocalRelation(type), targetId: member.id }] 
     };
-    list.push(newMember);
 
-    list[meIdx].relations = list[meIdx].relations || [];
-    list[meIdx].relations!.push({ type, targetId: newId });
-    const reciprocalType = reciprocal(type);
-    newMember.relations!.push({ type: reciprocalType, targetId: member.id });
+    const list = updateNestedMember([...members, newMember], member.id, (m) => ({
+      ...m,
+      relations: [...(m.relations || []), { type, targetId: newId }]
+    }));
 
     await saveMembers(list);
     setAdding(false);
@@ -374,27 +378,28 @@ export default function MemberScreen() {
     if (editingIndex === null || !member) return;
     if (!editingType) return Alert.alert('Select relation type');
     const newType = editingType === 'other' ? (editingCustom || 'other') : editingType;
-    const list = [...members];
-    const meIdx = list.findIndex((m) => m.id === member.id);
-    if (meIdx === -1) return Alert.alert('Error', 'Member not found');
-
-    const rel = list[meIdx].relations?.[editingIndex];
+    
+    const rel = member.relations?.[editingIndex];
     if (!rel) return Alert.alert('Error', 'Relation not found');
     const targetId = rel.targetId;
 
-    list[meIdx].relations![editingIndex].type = newType;
+    let list = updateNestedMember(members, member.id, (m) => {
+      const relations = [...(m.relations || [])];
+      relations[editingIndex] = { ...relations[editingIndex], type: newType };
+      return { ...m, relations };
+    });
 
-    const targetIdx = list.findIndex((m) => m.id === targetId);
-    if (targetIdx !== -1) {
-      list[targetIdx].relations = list[targetIdx].relations || [];
-      const recIdx = list[targetIdx].relations!.findIndex((r) => r.targetId === member.id);
-      const recType = reciprocal(newType);
+    list = updateNestedMember(list, targetId, (m) => {
+      const relations = [...(m.relations || [])];
+      const recIdx = relations.findIndex((r) => r.targetId === member.id);
+      const recType = reciprocalRelation(newType);
       if (recIdx !== -1) {
-        list[targetIdx].relations![recIdx].type = recType;
+        relations[recIdx] = { ...relations[recIdx], type: recType };
       } else {
-        list[targetIdx].relations!.push({ type: recType, targetId: member.id });
+        relations.push({ type: recType, targetId: member.id });
       }
-    }
+      return { ...m, relations };
+    });
 
     await saveMembers(list);
     setEditingIndex(null);
@@ -406,17 +411,20 @@ export default function MemberScreen() {
     if (!member) return;
 
     const performRemove = async () => {
-      const list = [...members];
-      const meIdx = list.findIndex((m) => m.id === member.id);
-      if (meIdx === -1) return;
-      const rel = list[meIdx].relations?.[index];
+      const rel = member.relations?.[index];
       if (!rel) return;
       const targetId = rel.targetId;
-      list[meIdx].relations = list[meIdx].relations!.filter((_, i) => i !== index);
-      const targetIdx = list.findIndex((m) => m.id === targetId);
-      if (targetIdx !== -1) {
-        list[targetIdx].relations = (list[targetIdx].relations || []).filter((r) => r.targetId !== member.id);
-      }
+
+      let list = updateNestedMember(members, member.id, (m) => ({
+        ...m,
+        relations: (m.relations || []).filter((_, i) => i !== index)
+      }));
+
+      list = updateNestedMember(list, targetId, (m) => ({
+        ...m,
+        relations: (m.relations || []).filter((r) => r.targetId !== member.id)
+      }));
+
       await saveMembers(list);
     };
 
@@ -572,15 +580,27 @@ export default function MemberScreen() {
               )}
             </View>
 
-            <Pressable 
-              onPress={handleTogglePin}
-              style={[styles.pinToggle, { backgroundColor: isPinned ? tint : tint + '15', borderColor: isPinned ? tint : border }]}
-            >
-              <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
-              <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
-                {isPinned ? 'Pinned as Default' : 'Pin as Default'}
-              </ThemedText>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Pressable 
+                onPress={handleTogglePin}
+                style={[styles.pinToggle, { backgroundColor: isPinned ? tint : tint + '15', borderColor: isPinned ? tint : border }]}
+              >
+                <Ionicons name={isPinned ? "pin" : "pin-outline"} size={16} color={isPinned ? "#fff" : tint} />
+                <ThemedText style={[styles.pinToggleText, { color: isPinned ? "#fff" : tint }]}>
+                  {isPinned ? 'Pinned' : 'Pin me'}
+                </ThemedText>
+              </Pressable>
+
+              <Pressable 
+                onPress={() => router.push(`/tree?focusId=${member.id}`)}
+                style={[styles.pinToggle, { backgroundColor: '#5856D615', borderColor: '#5856D630' }]}
+              >
+                <Ionicons name="git-network-outline" size={16} color="#5856D6" />
+                <ThemedText style={[styles.pinToggleText, { color: '#5856D6' }]}>
+                  Family Subtree
+                </ThemedText>
+              </Pressable>
+            </View>
 
             {member.dob && <ThemedText style={styles.profileDob}>Born: {member.dob}</ThemedText>}
           </View>
@@ -614,40 +634,46 @@ export default function MemberScreen() {
                   </Pressable>
                 ))}
               </View>
-              <ThemedText style={styles.label}>Date of Birth</ThemedText>
-              <View style={[styles.dateInputContainer, { borderColor: border }]}>
-                <TextInput
-                  placeholder="MM/DD/YYYY"
-                  placeholderTextColor="#94a3b8"
-                  value={dobInput}
-                  onChangeText={(t) => handleDateInputChange(t, setDobInput)}
-                  keyboardType="number-pad"
-                  style={[styles.dateInput, { color: textColor }]}
-                />
-                <Pressable 
-                  onPress={() => handleOpenDatePicker('profile')}
-                  style={styles.calendarIcon}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={tint} />
-                </Pressable>
-              </View>
+              <View style={styles.row}>
+                <View style={styles.flex1}>
+                  <ThemedText style={styles.label}>Date of Birth</ThemedText>
+                  <View style={[styles.dateInputContainer, { borderColor: border }]}>
+                    <TextInput
+                      placeholder="MM/DD/YYYY"
+                      placeholderTextColor="#94a3b8"
+                      value={dobInput}
+                      onChangeText={(t) => handleDateInputChange(t, setDobInput)}
+                      keyboardType="number-pad"
+                      style={[styles.dateInput, { color: textColor }]}
+                    />
+                    <Pressable 
+                      onPress={() => handleOpenDatePicker('profile')}
+                      style={styles.calendarIcon}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={tint} />
+                    </Pressable>
+                  </View>
+                </View>
 
-              <ThemedText style={styles.label}>Date of Death (Optional)</ThemedText>
-              <View style={[styles.dateInputContainer, { borderColor: border }]}>
-                <TextInput
-                  placeholder="MM/DD/YYYY"
-                  placeholderTextColor="#94a3b8"
-                  value={dodInput}
-                  onChangeText={(t) => handleDateInputChange(t, setDodInput)}
-                  keyboardType="number-pad"
-                  style={[styles.dateInput, { color: textColor }]}
-                />
-                <Pressable 
-                  onPress={() => handleOpenDatePicker('dod')}
-                  style={styles.calendarIcon}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={tint} />
-                </Pressable>
+                <View style={styles.flex1}>
+                  <ThemedText style={styles.label}>Date of Death</ThemedText>
+                  <View style={[styles.dateInputContainer, { borderColor: border }]}>
+                    <TextInput
+                      placeholder="MM/DD/YYYY"
+                      placeholderTextColor="#94a3b8"
+                      value={dodInput}
+                      onChangeText={(t) => handleDateInputChange(t, setDodInput)}
+                      keyboardType="number-pad"
+                      style={[styles.dateInput, { color: textColor }]}
+                    />
+                    <Pressable 
+                      onPress={() => handleOpenDatePicker('dod')}
+                      style={styles.calendarIcon}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={tint} />
+                    </Pressable>
+                  </View>
+                </View>
               </View>
 
               <ThemedText style={styles.label}>Notes</ThemedText>
@@ -661,7 +687,7 @@ export default function MemberScreen() {
                 style={[styles.notesInput, { backgroundColor: inputBg, borderColor: border, color: textColor }]}
               />
 
-              <ThemedText style={styles.metaText}>Age: {computeAge(dobInput) ?? '—'}</ThemedText>
+              <ThemedText style={styles.metaText}>Age: {computeAge(dobInput, dodInput) ?? '—'}</ThemedText>
               <Pressable style={[styles.saveBtn, { backgroundColor: tint }]} onPress={handleSaveProfileInfo}>
                 <ThemedText style={{ color: '#fff', fontWeight: '800' }}>Save Changes</ThemedText>
               </Pressable>
@@ -670,26 +696,6 @@ export default function MemberScreen() {
 
           {activeTab === 'family' && (
             <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
-                <Pressable style={[styles.addButton, { backgroundColor: tint }]} onPress={() => setAdding(true)}>
-                  <ThemedText style={styles.addButtonText}>+ Add</ThemedText>
-                </Pressable>
-              </View>
-
-              <View style={styles.quickActions}>
-                {(['parent', 'child', 'spouse', 'sibling'] as const).map((type) => (
-                  <Pressable
-                    key={type}
-                    onPress={() => { setSelectedType(type); setAdding(true); }}
-                    style={[styles.quickActionBtn, { backgroundColor: tint + '10', borderColor: tint + '30' }]}
-                  >
-                    <Ionicons name="add-circle-outline" size={18} color={tint} />
-                    <ThemedText style={[styles.quickActionText, { color: tint }]}>{type}</ThemedText>
-                  </Pressable>
-                ))}
-              </View>
-
               {member.relations && member.relations.length > 0 ? (
                 member.relations.map((rel, idx) => {
                   const target = findMemberNested(members, rel.targetId);
@@ -725,36 +731,47 @@ export default function MemberScreen() {
 
           {activeTab === 'insights' && (
             <View style={styles.section}>
-              <ThemedText style={styles.sectionTitle}>Family Subtree</ThemedText>
               <View style={styles.insightsGrid}>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Siblings', members: derivedRelations.siblings })}
+                >
                   <Ionicons name="people-outline" size={24} color={tint} />
                   <ThemedText style={styles.summaryLabel}>Siblings</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.siblings.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Grandparents', members: derivedRelations.grandparents })}
+                >
                   <Ionicons name="business-outline" size={24} color="#3b82f6" />
                   <ThemedText style={styles.summaryLabel}>Grandparents</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.grandparents.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Cousins', members: derivedRelations.cousins })}
+                >
                   <Ionicons name="heart-outline" size={24} color="#ef4444" />
                   <ThemedText style={styles.summaryLabel}>Cousins</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.cousins.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
-                <View style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}>
+                </Pressable>
+                <Pressable 
+                  style={[styles.insightCard, { backgroundColor: inputBg, borderColor: border }]}
+                  onPress={() => setListModal({ open: true, title: 'Nephew/Niece', members: derivedRelations.nephews })}
+                >
                   <Ionicons name="star-outline" size={24} color="#f59e0b" />
                   <ThemedText style={styles.summaryLabel}>Nephew/Niece</ThemedText>
                   <ThemedText style={styles.summaryValue} numberOfLines={2}>
                     {derivedRelations.nephews.map((m) => m.name).join(', ') || 'None'}
                   </ThemedText>
-                </View>
+                </Pressable>
               </View>
             </View>
           )}
@@ -907,6 +924,48 @@ export default function MemberScreen() {
             </View>
           </Modal>
         )}
+
+        {listModal.open && (
+          <Modal transparent animationType="slide" visible={listModal.open} onRequestClose={() => setListModal({ ...listModal, open: false })}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalContent, { backgroundColor: inputBg }]}>
+                <View style={styles.sectionHeader}>
+                  <ThemedText style={styles.modalTitle}>{listModal.title}</ThemedText>
+                  <Pressable onPress={() => setListModal({ ...listModal, open: false })}>
+                    <Ionicons name="close" size={24} color={textColor} />
+                  </Pressable>
+                </View>
+                
+                <ScrollView style={styles.memberList}>
+                  {listModal.members.length > 0 ? (
+                    listModal.members.map((m) => (
+                      <Pressable 
+                        key={m.id} 
+                        style={styles.memberRow}
+                        onPress={() => {
+                          setListModal({ ...listModal, open: false });
+                          router.push(`/member?id=${m.id}`);
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          <View style={[styles.avatarSmall, { backgroundColor: tint + '20' }]}>
+                            {m.photo ? <Image source={{ uri: m.photo }} style={styles.avatarImg} /> : <ThemedText style={{ color: tint, fontWeight: '700' }}>{m.name.charAt(0)}</ThemedText>}
+                          </View>
+                          <View>
+                            <ThemedText style={{ fontWeight: '700' }}>{m.name}</ThemedText>
+                            {m.dob && <ThemedText style={{ fontSize: 12, color: '#64748b' }}>{m.dob}</ThemedText>}
+                          </View>
+                        </View>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <ThemedText style={styles.emptyText}>No members found.</ThemedText>
+                  )}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
+        )}
       </KeyboardAvoidingView>
     </ThemedView>
   );
@@ -1042,7 +1101,9 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   metaText: { fontSize: 13, color: '#64748b', marginBottom: 12, fontWeight: '500' },
-  saveBtn: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12 },
+  saveBtn: { alignSelf: 'center', paddingVertical: 12, paddingHorizontal: 32, borderRadius: 12 },
+  row: { flexDirection: 'row', gap: 12 },
+  flex1: { flex: 1 },
   memberList: { maxHeight: 200, marginBottom: 16 },
   memberRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 4 },

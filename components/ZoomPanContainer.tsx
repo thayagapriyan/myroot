@@ -86,6 +86,14 @@ export const ZoomPanContainer = React.forwardRef<ZoomPanContainerHandle, ZoomPan
       }
     }, [containerWidth, containerHeight, scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY, onZoomChange]);
 
+    const hasFocusedRef = React.useRef(false);
+    React.useEffect(() => {
+      if (!hasFocusedRef.current && initialFocusX !== undefined && initialFocusY !== undefined && containerWidth > 0) {
+        focusOn(initialFocusX, initialFocusY, 0.5);
+        hasFocusedRef.current = true;
+      }
+    }, [initialFocusX, initialFocusY, containerWidth, focusOn]);
+
     const resetZoomPan = useCallback(() => {
       if (initialFocusX !== undefined && initialFocusY !== undefined) {
         focusOn(initialFocusX, initialFocusY, 0.5);
